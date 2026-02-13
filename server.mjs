@@ -1,8 +1,8 @@
-// DM-2026 Production Backend (Replicate ONLY) — v4
-// Fixes:
-// 1) "Invalid image data" -> detect real image mime (iOS often sends application/octet-stream)
-// 2) WAN video schema keys -> uses num_frames + frames_per_second (not seconds/fps)
-// 3) Budget guardrails -> default 480p, 81 frames (~5s @16fps), interpolate_output=false
+// DM-2026 Production Backend (Replicate ONLY) — v5 (Image fidelity + cost)
+// Changes vs v4:
+// - Stronger structural lock prompt (prevents "blank texture" outputs)
+// - Higher default image_prompt_strength (keeps child's drawing)
+// - Slightly lower default steps (cost target <= $0.05)
 
 import express from "express";
 import multer from "multer";
@@ -20,7 +20,7 @@ const env = (k, d = undefined) => (process.env[k] ?? d);
 const REPLICATE_API_TOKEN = env("REPLICATE_API_TOKEN");
 if (!REPLICATE_API_TOKEN) throw new Error("REPLICATE_API_TOKEN is required");
 
-// Image model (Flux etc.)
+// Image model
 const REPLICATE_IMAGE_OWNER = env("REPLICATE_IMAGE_OWNER");
 const REPLICATE_IMAGE_MODEL = env("REPLICATE_IMAGE_MODEL");
 
@@ -29,24 +29,24 @@ const REPLICATE_VIDEO_OWNER = env("REPLICATE_VIDEO_OWNER", env("REPLICATE_OWNER"
 const REPLICATE_VIDEO_MODEL = env("REPLICATE_VIDEO_MODEL", env("REPLICATE_MODEL"));
 
 // Input keys
-const IMG_INPUT_KEY = env("IMG_INPUT_KEY", "image_prompt"); // for FLUX Ultra i2i: image_prompt
-const VIDEO_INPUT_KEY = env("VIDEO_INPUT_KEY", "image");    // for WAN i2v: image
+const IMG_INPUT_KEY = env("IMG_INPUT_KEY", "image_prompt"); // Flux Ultra i2i
+const VIDEO_INPUT_KEY = env("VIDEO_INPUT_KEY", "image");    // WAN i2v
 
 // Prompt keys
 const IMG_PROMPT_KEY = env("IMG_PROMPT_KEY", "prompt");
 const IMG_NEG_PROMPT_KEY = env("IMG_NEG_PROMPT_KEY", "negative_prompt");
-const VIDEO_PROMPT_KEY = env("VIDEO_PROMPT_KEY", "prompt"); // REQUIRED for WAN
+const VIDEO_PROMPT_KEY = env("VIDEO_PROMPT_KEY", "prompt"); // required for WAN
 
-// Image tuning (keep moderate for cost)
-const IMAGE_STEPS = Number(env("IMAGE_STEPS", "24"));
-const IMAGE_GUIDANCE = Number(env("IMAGE_GUIDANCE", "4.5"));
+// Image tuning (cost + fidelity)
+const IMAGE_STEPS = Number(env("IMAGE_STEPS", "20"));            // ↓ cost
+const IMAGE_GUIDANCE = Number(env("IMAGE_GUIDANCE", "4.0"));     // moderate
 const IMAGE_ASPECT_RATIO = env("IMAGE_ASPECT_RATIO", "3:2");
-const IMAGE_PROMPT_STRENGTH = Number(env("IMAGE_PROMPT_STRENGTH", "0.25")); // Flux Ultra has image_prompt_strength
+const IMAGE_PROMPT_STRENGTH = Number(env("IMAGE_PROMPT_STRENGTH", "0.75")); // ↑ keep drawing
 
 // Video tuning (WAN schema)
 const VIDEO_RESOLUTION = env("VIDEO_RESOLUTION", "480p");
 const VIDEO_FPS = clampInt(env("VIDEO_FPS", "16"), 5, 30, 16);
-const VIDEO_NUM_FRAMES = clampInt(env("VIDEO_NUM_FRAMES", "81"), 81, 121, 81); // ~5s @16fps
+const VIDEO_NUM_FRAMES = clampInt(env("VIDEO_NUM_FRAMES", "81"), 81, 121, 81);
 const VIDEO_GO_FAST = env("VIDEO_GO_FAST", "true") === "true";
 const VIDEO_INTERPOLATE = env("VIDEO_INTERPOLATE", "false") === "true";
 
@@ -56,20 +56,16 @@ function clampInt(v, min, max, fallback) {
   return Math.max(min, Math.min(max, Math.round(n)));
 }
 
-// ---- MIME sniffing (critical for iOS uploads) ----
+// MIME sniffing (iOS uploads often come as octet-stream)
 function sniffMime(buf) {
   if (!buf || buf.length < 12) return "application/octet-stream";
-  // JPEG: FF D8 FF
   if (buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) return "image/jpeg";
-  // PNG: 89 50 4E 47 0D 0A 1A 0A
   const pngSig = [0x89,0x50,0x4e,0x47,0x0d,0x0a,0x1a,0x0a];
   let isPng = true;
   for (let i=0;i<pngSig.length;i++) if (buf[i] !== pngSig[i]) { isPng = false; break; }
   if (isPng) return "image/png";
-  // GIF: "GIF87a" or "GIF89a"
   const h6 = buf.subarray(0, 6).toString("ascii");
   if (h6 === "GIF87a" || h6 === "GIF89a") return "image/gif";
-  // WEBP: "RIFF....WEBP"
   const riff = buf.subarray(0, 4).toString("ascii");
   const webp = buf.subarray(8, 12).toString("ascii");
   if (riff === "RIFF" && webp === "WEBP") return "image/webp";
@@ -82,7 +78,7 @@ function toDataUrl(file) {
   return `data:${mime};base64,${b64}`;
 }
 
-// ---- Prompt helpers ----
+// Prompts
 function stylePrompt(styleId) {
   switch ((styleId || "").toLowerCase()) {
     case "anime":
@@ -96,16 +92,16 @@ function stylePrompt(styleId) {
 
 function baseStructureLock() {
   return [
-    "Keep the exact same composition and framing as the input drawing.",
-    "Do NOT zoom, do NOT crop, do NOT rotate, do NOT shift the subject.",
-    "Do NOT add new objects, characters, text, borders, or stickers.",
-    "Fill the canvas fully, no white margins, no empty paper areas.",
-    "Preserve the child drawing identity (same pose, silhouette, proportions).",
-    "Improve quality only: clean lines, better colors, neat shading."
+    "STRICTLY preserve the input drawing content: same objects, same pose, same composition.",
+    "Do NOT zoom, crop, rotate, or shift anything. Keep full frame identical.",
+    "Do NOT add any new objects, text, logos, borders, stickers, background scenes.",
+    "Use the input drawing as a reference sketch: cleanly trace its lines and shapes.",
+    "Keep the child identity: same silhouette and proportions.",
+    "Only improve quality: cleaner lines, better colors, neat shading.",
+    "Fill the entire canvas; NO white margins and NO blank paper texture."
   ].join(" ");
 }
 
-// ---- Replicate HTTP ----
 async function replicateCreatePrediction(owner, model, input) {
   if (!owner || !model) throw new Error("Replicate model env is missing (owner/model)");
   const url = `https://api.replicate.com/v1/models/${owner}/${model}/predictions`;
@@ -135,7 +131,6 @@ async function replicateGetPrediction(id) {
   return r.json();
 }
 
-// ---- Routes ----
 app.get("/", (req, res) => res.status(200).send("DM-2026 backend: OK"));
 app.get("/health", (req, res) => res.status(200).json({ ok: true }));
 app.get("/me", (req, res) =>
@@ -145,11 +140,12 @@ app.get("/me", (req, res) =>
     ok: true,
     image: { owner: REPLICATE_IMAGE_OWNER || null, model: REPLICATE_IMAGE_MODEL || null, img_input_key: IMG_INPUT_KEY },
     video: { owner: REPLICATE_VIDEO_OWNER || null, model: REPLICATE_VIDEO_MODEL || null, video_input_key: VIDEO_INPUT_KEY },
+    image_defaults: { steps: IMAGE_STEPS, guidance: IMAGE_GUIDANCE, aspect_ratio: IMAGE_ASPECT_RATIO, image_prompt_strength: IMAGE_PROMPT_STRENGTH },
     video_defaults: { resolution: VIDEO_RESOLUTION, frames_per_second: VIDEO_FPS, num_frames: VIDEO_NUM_FRAMES, go_fast: VIDEO_GO_FAST, interpolate_output: VIDEO_INTERPOLATE }
   })
 );
 
-// IMAGE start (returns id)
+// IMAGE start
 app.post("/magic", upload.single("image"), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ ok: false, error: "image required" });
@@ -161,7 +157,7 @@ app.post("/magic", upload.single("image"), async (req, res) => {
     const input = {
       [IMG_INPUT_KEY]: imageDataUrl,
       [IMG_PROMPT_KEY]: prompt,
-      [IMG_NEG_PROMPT_KEY]: "zoomed in, cropped, out of frame, extra objects, text, watermark, border, white margin, empty paper",
+      [IMG_NEG_PROMPT_KEY]: "blank texture, paper texture, empty image, zoomed in, cropped, out of frame, extra objects, text, watermark, border, white margin",
       steps: IMAGE_STEPS,
       guidance: IMAGE_GUIDANCE,
       aspect_ratio: IMAGE_ASPECT_RATIO,
@@ -175,12 +171,10 @@ app.post("/magic", upload.single("image"), async (req, res) => {
   }
 });
 
-// IMAGE status
 app.get("/magic/status", async (req, res) => {
   try {
     const id = String(req.query.id || "");
     if (!id) return res.status(400).json({ ok: false, error: "id required" });
-
     const pred = await replicateGetPrediction(id);
     res.status(200).json({ ok: true, status: pred.status, output: pred.output ?? null, error: pred.error ?? null });
   } catch (e) {
@@ -188,7 +182,7 @@ app.get("/magic/status", async (req, res) => {
   }
 });
 
-// VIDEO start (WAN schema)
+// VIDEO start (WAN)
 app.post("/video/start", upload.single("image"), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ ok: false, error: "image required" });
@@ -208,24 +202,16 @@ app.post("/video/start", upload.single("image"), async (req, res) => {
     };
 
     const pred = await replicateCreatePrediction(REPLICATE_VIDEO_OWNER, REPLICATE_VIDEO_MODEL, input);
-    res.status(200).json({
-      ok: true,
-      id: pred.id,
-      resolution: VIDEO_RESOLUTION,
-      frames_per_second: VIDEO_FPS,
-      num_frames: VIDEO_NUM_FRAMES
-    });
+    res.status(200).json({ ok: true, id: pred.id, resolution: VIDEO_RESOLUTION, frames_per_second: VIDEO_FPS, num_frames: VIDEO_NUM_FRAMES });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
   }
 });
 
-// VIDEO status
 app.get("/video/status", async (req, res) => {
   try {
     const id = String(req.query.id || "");
     if (!id) return res.status(400).json({ ok: false, error: "id required" });
-
     const pred = await replicateGetPrediction(id);
     res.status(200).json({ ok: true, status: pred.status, output: pred.output ?? null, error: pred.error ?? null });
   } catch (e) {
