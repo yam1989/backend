@@ -1,6 +1,6 @@
 {
   "name": "dm-2026-backend",
-  "version": "9.1.0",
+  "version": "9.1.1",
   "type": "module",
   "private": true,
   "engines": {
