@@ -1,5 +1,5 @@
 // server.mjs
-// DM-2026 Backend v9.0 (Full endpoints, cheaper images)
+// DM-2026 Backend v9.1 (Replicate default, OpenAI gated, fill canvas)
 // Image Magic:
 //   - Default: Replicate image model (cheap, ~2–5¢), keeps aspect ratio 3:2 to avoid zoom/crop
 //   - Optional Premium: OpenAI Responses image_generation (expensive, can be enabled per-style via env)
@@ -15,7 +15,7 @@ import express from "express";
 import cors from "cors";
 import multer from "multer";
 
-const VERSION = "server.mjs v9.1-dm26 (Replicate default, OpenAI gated, fill canvas)";
+const VERSION = "server.mjs v9.1-dm26 (Replicate default, OpenAI gated, fill canvas) [syntax-fixed]";
 const PORT = Number(process.env.PORT || 8080);
 
 // ---------- ENV ----------
@@ -29,7 +29,12 @@ const OA_IMG_ACTION = process.env.IMG_ACTION || "edit";
 const MAGIC_TIMEOUT_MS = Number(process.env.MAGIC_TIMEOUT_MS || 180000);
 
 // Which styles should use OpenAI (comma-separated). Example: "magic,watercolor"
-const OPENAI_IMAGE_STYLES = (process.env.OPENAI_IMAGE_STYLES || "").split(",").map(s => s.trim()).filter(Boolean);
+const OPENAI_IMAGE_STYLES = (process.env.OPENAI_IMAGE_STYLES || "")
+  .split(",")
+  .map((s) => s.trim())
+  .filter(Boolean);
+
+// Explicit gate (if not true -> OpenAI never used for images)
 const ENABLE_OPENAI_IMAGE = String(process.env.ENABLE_OPENAI_IMAGE || "").toLowerCase() === "true";
 
 // Replicate (shared token)
@@ -44,8 +49,10 @@ const VIDEO_TIMEOUT_MS = Number(process.env.VIDEO_TIMEOUT_MS || 60000);
 // Replicate image (cheap) — used by default for ALL image styles unless style is in OPENAI_IMAGE_STYLES
 const REPLICATE_IMAGE_OWNER = process.env.REPLICATE_IMAGE_OWNER || "black-forest-labs";
 const REPLICATE_IMAGE_MODEL = process.env.REPLICATE_IMAGE_MODEL || "flux-dev";
+
 // ask model to keep wide canvas, avoids “left zoom”
 const REPLICATE_IMAGE_ASPECT_RATIO = process.env.REPLICATE_IMAGE_ASPECT_RATIO || "3:2"; // wide
+
 // optional: if model supports it; safe to include (ignored if unsupported)
 const REPLICATE_IMAGE_NUM_OUTPUTS = Number(process.env.REPLICATE_IMAGE_NUM_OUTPUTS || 1);
 const REPLICATE_IMAGE_GUIDANCE = Number(process.env.REPLICATE_IMAGE_GUIDANCE || 3.5);
@@ -75,6 +82,17 @@ function getText(req, key) {
   const v = req.body?.[key];
   if (v === undefined || v === null) return "";
   return String(v);
+}
+
+function clampInt(value, min, max, fallback) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(min, Math.min(max, Math.round(n)));
+}
+function clampNumber(value, min, max, fallback) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(min, Math.min(max, n));
 }
 
 async function fetchWithTimeout(url, options, timeoutMs) {
@@ -124,18 +142,18 @@ DO NOT:
 - Change framing or crop.`;
 }
 
-`;
-}
-
 function stylePromptReplicate(styleId = "magic") {
   const lock = baseStructureLock();
+
+  // (без бэктиков — чтобы никогда не ломалось копированием)
   const map = {
-    magic: `STYLE: premium kids magical illustration, subtle glow, smooth gradients.`,
-    watercolor: `STYLE: high-end watercolor illustration, controlled washes, clean edges.`,
-    cartoon: `STYLE: premium modern cartoon, soft cel shading, kid-friendly palette.`,
-    clay: `STYLE: stylized clay-toy look (not realistic), soft studio lighting.`,
-    three_d: `STYLE: stylized 3D animated movie look, smooth materials, soft studio lighting.`,
+    magic: "STYLE: premium kids magical illustration, subtle glow, smooth gradients.",
+    watercolor: "STYLE: high-end watercolor illustration, controlled washes, clean edges.",
+    cartoon: "STYLE: premium modern cartoon, soft cel shading, kid-friendly palette.",
+    clay: "STYLE: stylized clay-toy look (not realistic), soft studio lighting.",
+    three_d: "STYLE: stylized 3D animated movie look, smooth materials, soft studio lighting.",
   };
+
   return `${lock}\n${map[String(styleId || "magic")] || map.magic}`;
 }
 
@@ -143,6 +161,7 @@ function stylePromptOpenAI(styleId = "magic", userPrompt = "") {
   // Keep it short (cheaper tokens)
   const base = `Premium children's book illustrator. Redraw the input drawing into a clean, colorful, high-quality illustration.
 Keep exact structure, pose, composition, and identity. No zoom/crop. Do not add/remove objects. Not photorealistic.`;
+
   const styleHints = {
     magic: "Magical premium kids illustration, subtle glow, smooth gradients.",
     watercolor: "High-end watercolor illustration, controlled washes.",
@@ -150,6 +169,7 @@ Keep exact structure, pose, composition, and identity. No zoom/crop. Do not add/
     clay: "Stylized clay-toy look (not realistic).",
     three_d: "Stylized 3D animated film look (not realistic).",
   };
+
   const extra = userPrompt ? `\nExtra request: ${userPrompt}` : "";
   return `${base}\n${styleHints[String(styleId || "magic")] || styleHints.magic}${extra}`;
 }
@@ -176,6 +196,7 @@ app.get("/", (req, res) => {
     version: VERSION,
     image: {
       default_provider: "replicate",
+      openai_enabled: ENABLE_OPENAI_IMAGE && Boolean(OPENAI_API_KEY),
       openai_styles: OPENAI_IMAGE_STYLES,
       replicate_model: `${REPLICATE_IMAGE_OWNER}/${REPLICATE_IMAGE_MODEL}`,
       replicate_aspect_ratio: REPLICATE_IMAGE_ASPECT_RATIO,
@@ -193,6 +214,7 @@ app.get("/me", (req, res) => {
     version: VERSION,
     openai: {
       enabled: Boolean(OPENAI_API_KEY),
+      enable_openai_image: ENABLE_OPENAI_IMAGE,
       responses_model: RESP_MODEL,
       tool: {
         type: "image_generation",
@@ -441,7 +463,7 @@ app.get("/video/status", async (req, res) => {
     }
 
     if (data?.status === "succeeded") {
-      const output = Array.isArray(data.output) ? (data.output[0] || null) : (data.output || null);
+      const output = Array.isArray(data.output) ? data.output[0] || null : data.output || null;
       return res.json({ ok: true, status: "succeeded", output });
     }
 
