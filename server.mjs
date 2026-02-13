@@ -44,7 +44,6 @@ const VIDEO_TIMEOUT_MS = Number(process.env.VIDEO_TIMEOUT_MS || 60000);
 // Replicate image (cheap) — used by default for ALL image styles unless style is in OPENAI_IMAGE_STYLES
 const REPLICATE_IMAGE_OWNER = process.env.REPLICATE_IMAGE_OWNER || "black-forest-labs";
 const REPLICATE_IMAGE_MODEL = process.env.REPLICATE_IMAGE_MODEL || "flux-dev";
-const IMG_INPUT_KEY = process.env.IMG_INPUT_KEY || "image"; // Replicate i2i image field key
 // ask model to keep wide canvas, avoids “left zoom”
 const REPLICATE_IMAGE_ASPECT_RATIO = process.env.REPLICATE_IMAGE_ASPECT_RATIO || "3:2"; // wide
 // optional: if model supports it; safe to include (ignored if unsupported)
@@ -125,6 +124,7 @@ DO NOT:
 - Change framing or crop.`;
 }
 
+
 function stylePromptReplicate(styleId = "magic") {
   const lock = baseStructureLock();
   const map = {
@@ -164,20 +164,6 @@ function pickFirstOutput(output) {
     if (Array.isArray(urls)) return urls[0] || null;
   }
   return null;
-}
-
-
-
-function clampNumber(v, min, max, fallback) {
-  const n = Number(v);
-  if (!Number.isFinite(n)) return fallback;
-  return Math.max(min, Math.min(max, n));
-}
-
-function clampInt(v, min, max, fallback) {
-  const n = Number.parseInt(String(v), 10);
-  if (!Number.isFinite(n)) return fallback;
-  return Math.max(min, Math.min(max, n));
 }
 
 // ---------- routes ----------
@@ -247,7 +233,7 @@ app.post("/magic", upload.single("image"), async (req, res) => {
 
       const payload = {
         input: {
-          [IMG_INPUT_KEY]: imageInput,
+          image: imageInput,
           prompt: stylePromptReplicate(styleId),
           // common optional params (ignored if unsupported)
           aspect_ratio: REPLICATE_IMAGE_ASPECT_RATIO,
