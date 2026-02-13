@@ -1,57 +1,60 @@
 // server.mjs
-// DM-2026 Backend v10.0 — Replicate ONLY (Image + Video), Cloud Run stable
+// DM-2026 Backend v9.0 (Full endpoints, cheaper images)
+// Image Magic:
+//   - Default: Replicate image model (cheap, ~2–5¢), keeps aspect ratio 3:2 to avoid zoom/crop
+//   - Optional Premium: OpenAI Responses image_generation (expensive, can be enabled per-style via env)
+// Video Magic: Replicate i2v (wan-2.2-i2v-fast)
 //
 // Endpoints (unchanged):
 //   GET  /, /health, /me
-//   POST /magic           (multipart/form-data: image + styleId [+ prompt])
-//   POST /video/start     (multipart/form-data: image OR body.imageUrl + optional prompt)
+//   POST /magic
+//   POST /video/start
 //   GET  /video/status?id=...
 
 import express from "express";
 import cors from "cors";
 import multer from "multer";
 
-const VERSION = "server.mjs v10.0-dm26 (Replicate ONLY, cloud-run stable)";
+const VERSION = "server.mjs v9.1-dm26 (Replicate default, OpenAI gated, fill canvas)";
 const PORT = Number(process.env.PORT || 8080);
 
 // ---------- ENV ----------
-const MAX_UPLOAD_MB = Number(process.env.MAX_UPLOAD_MB || 10);
+// OpenAI (optional, premium)
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY || "";
+const RESP_MODEL = process.env.RESP_MODEL || "gpt-4.1-mini";
+const OA_IMG_SIZE = process.env.IMG_SIZE || "1536x1024";
+const OA_IMG_QUALITY = process.env.IMG_QUALITY || "medium";
+const OA_IMG_INPUT_FIDELITY = process.env.IMG_INPUT_FIDELITY || "high";
+const OA_IMG_ACTION = process.env.IMG_ACTION || "edit";
+const MAGIC_TIMEOUT_MS = Number(process.env.MAGIC_TIMEOUT_MS || 180000);
 
-// Replicate token (required)
+// Which styles should use OpenAI (comma-separated). Example: "magic,watercolor"
+const OPENAI_IMAGE_STYLES = (process.env.OPENAI_IMAGE_STYLES || "").split(",").map(s => s.trim()).filter(Boolean);
+const ENABLE_OPENAI_IMAGE = String(process.env.ENABLE_OPENAI_IMAGE || "").toLowerCase() === "true";
+
+// Replicate (shared token)
 const REPLICATE_API_TOKEN = process.env.REPLICATE_API_TOKEN || "";
 
-// Replicate Image model
-// You can set either:
-// A) Official model endpoint:
-//   REPLICATE_IMAGE_OWNER + REPLICATE_IMAGE_MODEL
-// B) Community version (recommended when model inputs differ a lot):
-//   REPLICATE_IMAGE_VERSION_ID + REPLICATE_IMAGE_OWNER + REPLICATE_IMAGE_MODEL  (used via /v1/predictions)
-const REPLICATE_IMAGE_OWNER = process.env.REPLICATE_IMAGE_OWNER || "black-forest-labs";
-const REPLICATE_IMAGE_MODEL = process.env.REPLICATE_IMAGE_MODEL || "flux-dev";
-const REPLICATE_IMAGE_VERSION_ID = process.env.REPLICATE_IMAGE_VERSION_ID || "";
-
-// IMPORTANT: different Replicate image models use different input keys for the image.
-// Common keys: "image", "image_prompt", "init_image", "input_image".
-// Put what YOUR model expects into IMG_INPUT_KEY.
-// Default tries "image".
-const IMG_INPUT_KEY = process.env.IMG_INPUT_KEY || "image";
-
-// Optional: some models accept "action" (e.g. "edit", "inpaint"). Leave empty if unknown.
-const IMG_ACTION = process.env.IMG_ACTION || "";
-
-// Output framing control (helps avoid zoom/crop and white margins)
-const REPLICATE_IMAGE_ASPECT_RATIO = process.env.REPLICATE_IMAGE_ASPECT_RATIO || "3:2"; // wide
-const REPLICATE_IMAGE_STEPS = Number(process.env.REPLICATE_IMAGE_STEPS || 24);
-const REPLICATE_IMAGE_GUIDANCE = Number(process.env.REPLICATE_IMAGE_GUIDANCE || 3.5);
-const REPLICATE_IMAGE_TIMEOUT_MS = Number(process.env.REPLICATE_IMAGE_TIMEOUT_MS || 120000);
-
-// Replicate Video model (your current i2v)
+// Replicate video (unchanged)
 const REPLICATE_VIDEO_OWNER = process.env.REPLICATE_OWNER || "wan-video";
 const REPLICATE_VIDEO_MODEL = process.env.REPLICATE_MODEL || "wan-2.2-i2v-fast";
 const REPLICATE_VIDEO_VERSION_ID = process.env.REPLICATE_VERSION_ID || ""; // optional
 const VIDEO_TIMEOUT_MS = Number(process.env.VIDEO_TIMEOUT_MS || 60000);
 
-// ---------- app ----------
+// Replicate image (cheap) — used by default for ALL image styles unless style is in OPENAI_IMAGE_STYLES
+const REPLICATE_IMAGE_OWNER = process.env.REPLICATE_IMAGE_OWNER || "black-forest-labs";
+const REPLICATE_IMAGE_MODEL = process.env.REPLICATE_IMAGE_MODEL || "flux-dev";
+const IMG_INPUT_KEY = process.env.IMG_INPUT_KEY || "image"; // Replicate i2i image field key
+// ask model to keep wide canvas, avoids “left zoom”
+const REPLICATE_IMAGE_ASPECT_RATIO = process.env.REPLICATE_IMAGE_ASPECT_RATIO || "3:2"; // wide
+// optional: if model supports it; safe to include (ignored if unsupported)
+const REPLICATE_IMAGE_NUM_OUTPUTS = Number(process.env.REPLICATE_IMAGE_NUM_OUTPUTS || 1);
+const REPLICATE_IMAGE_GUIDANCE = Number(process.env.REPLICATE_IMAGE_GUIDANCE || 3.5);
+const REPLICATE_IMAGE_STEPS = Number(process.env.REPLICATE_IMAGE_STEPS || 24);
+const REPLICATE_IMAGE_TIMEOUT_MS = Number(process.env.REPLICATE_IMAGE_TIMEOUT_MS || 90000);
+
+const MAX_UPLOAD_MB = Number(process.env.MAX_UPLOAD_MB || 10);
+
 const app = express();
 app.use(cors({ origin: true }));
 app.use(express.json({ limit: "25mb" }));
@@ -61,6 +64,7 @@ const upload = multer({
   limits: { fileSize: MAX_UPLOAD_MB * 1024 * 1024 },
 });
 
+// ---------- helpers ----------
 process.on("unhandledRejection", (e) => console.error("unhandledRejection:", e));
 process.on("uncaughtException", (e) => console.error("uncaughtException:", e));
 
@@ -72,17 +76,6 @@ function getText(req, key) {
   const v = req.body?.[key];
   if (v === undefined || v === null) return "";
   return String(v);
-}
-
-function clampInt(value, min, max, fallback) {
-  const n = Number(value);
-  if (!Number.isFinite(n)) return fallback;
-  return Math.max(min, Math.min(max, Math.round(n)));
-}
-function clampNumber(value, min, max, fallback) {
-  const n = Number(value);
-  if (!Number.isFinite(n)) return fallback;
-  return Math.max(min, Math.min(max, n));
 }
 
 async function fetchWithTimeout(url, options, timeoutMs) {
@@ -106,10 +99,65 @@ function bufferToDataUri(buf, mime) {
   return `data:${m};base64,${Buffer.from(buf).toString("base64")}`;
 }
 
+// ----- prompts -----
+function baseStructureLock() {
+  return `KEEP EXACT STRUCTURE (NO ZOOM / NO CROP):
+- Keep the same subject and identity (if it is a bear, it stays the SAME bear).
+- Keep the same pose, silhouette, proportions, and placement.
+- Keep the same composition and framing (NO zoom, NO crop, NO camera change).
+- Keep the same number of objects and elements.
+- Keep background layout the same.
+
+VERY IMPORTANT:
+- Output MUST fill the entire canvas edge-to-edge.
+- NO empty white margins.
+- If there is extra space, EXTEND the existing background (sky/sea/ground) naturally to the edges.
+- Keep the drawing upright (correct orientation).
+
+DO:
+- Redraw cleanly with confident outlines.
+- Add clear vibrant colors and soft shading.
+- Remove sketch noise and dirt.
+
+DO NOT:
+- Add/remove objects, text, watermark.
+- Change character identity/species.
+- Change framing or crop.`;
+}
+
+function stylePromptReplicate(styleId = "magic") {
+  const lock = baseStructureLock();
+  const map = {
+    magic: `STYLE: premium kids magical illustration, subtle glow, smooth gradients.`,
+    watercolor: `STYLE: high-end watercolor illustration, controlled washes, clean edges.`,
+    cartoon: `STYLE: premium modern cartoon, soft cel shading, kid-friendly palette.`,
+    clay: `STYLE: stylized clay-toy look (not realistic), soft studio lighting.`,
+    three_d: `STYLE: stylized 3D animated movie look, smooth materials, soft studio lighting.`,
+  };
+  return `${lock}\n${map[String(styleId || "magic")] || map.magic}`;
+}
+
+function stylePromptOpenAI(styleId = "magic", userPrompt = "") {
+  // Keep it short (cheaper tokens)
+  const base = `Premium children's book illustrator. Redraw the input drawing into a clean, colorful, high-quality illustration.
+Keep exact structure, pose, composition, and identity. No zoom/crop. Do not add/remove objects. Not photorealistic.`;
+  const styleHints = {
+    magic: "Magical premium kids illustration, subtle glow, smooth gradients.",
+    watercolor: "High-end watercolor illustration, controlled washes.",
+    cartoon: "Premium modern cartoon, soft cel shading.",
+    clay: "Stylized clay-toy look (not realistic).",
+    three_d: "Stylized 3D animated film look (not realistic).",
+  };
+  const extra = userPrompt ? `\nExtra request: ${userPrompt}` : "";
+  return `${base}\n${styleHints[String(styleId || "magic")] || styleHints.magic}${extra}`;
+}
+
+// ----- replicate output normalize -----
 function pickFirstOutput(output) {
   if (!output) return null;
   if (typeof output === "string") return output;
   if (Array.isArray(output)) return output[0] || null;
+  // sometimes output is { images: [...] } or similar
   if (typeof output === "object") {
     const urls = output?.images || output?.image || output?.url;
     if (typeof urls === "string") return urls;
@@ -118,43 +166,18 @@ function pickFirstOutput(output) {
   return null;
 }
 
-// ---------- prompts (Replicate) ----------
-function baseStructureLock() {
-  return (
-    "This is a child's drawing photo. Transform it into a clean, colorful, premium finished illustration, " +
-    "but KEEP EXACT STRUCTURE and identity.\n\n" +
-    "ABSOLUTE MUST KEEP (structure lock):\n" +
-    "- Same subject and identity (if it's a bear, it stays the SAME bear).\n" +
-    "- Same pose, silhouette, proportions, and placement.\n" +
-    "- Same composition and framing (NO zoom, NO crop, NO camera change).\n" +
-    "- Same number of objects/elements.\n" +
-    "- Keep background layout the same.\n\n" +
-    "FILL CANVAS:\n" +
-    "- Output must fill the entire canvas edge-to-edge.\n" +
-    "- NO empty white margins.\n" +
-    "- If there is extra space, EXTEND existing background (sky/sea/ground) naturally.\n\n" +
-    "DO:\n" +
-    "- Redraw with confident clean outlines.\n" +
-    "- Add vibrant kid-friendly colors, smooth shading, subtle highlights.\n" +
-    "- Remove paper texture, dirt, blur, glare.\n\n" +
-    "DO NOT:\n" +
-    "- Add/remove objects, text, watermark.\n" +
-    "- Change identity/species.\n" +
-    "- Change framing."
-  );
+
+
+function clampNumber(v, min, max, fallback) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(min, Math.min(max, n));
 }
 
-function stylePromptReplicate(styleId = "magic") {
-  const base = baseStructureLock();
-  const styles = {
-    magic: "STYLE: premium kids magical illustration, subtle glow, smooth gradients, expensive iOS look.",
-    watercolor: "STYLE: high-end watercolor illustration, controlled washes, clean edges, soft paper feel.",
-    cartoon: "STYLE: premium modern cartoon, clean edges, soft cel shading, warm palette.",
-    clay: "STYLE: stylized clay-toy look (not realistic), soft studio lighting, rounded forms.",
-    three_d: "STYLE: stylized 3D animated movie look (not realistic), smooth materials, soft lighting.",
-  };
-  const s = styles[String(styleId || "magic")] || styles.magic;
-  return `${base}\n\n${s}`;
+function clampInt(v, min, max, fallback) {
+  const n = Number.parseInt(String(v), 10);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(min, Math.min(max, n));
 }
 
 // ---------- routes ----------
@@ -163,25 +186,13 @@ app.get("/", (req, res) => {
     ok: true,
     service: "doodle-magic-backend",
     version: VERSION,
-    openai: { enabled: false },
-    replicate: {
-      enabled: Boolean(REPLICATE_API_TOKEN),
-      image: {
-        owner: REPLICATE_IMAGE_OWNER,
-        model: REPLICATE_IMAGE_MODEL,
-        version_id: REPLICATE_IMAGE_VERSION_ID || null,
-        img_input_key: IMG_INPUT_KEY,
-        aspect_ratio: REPLICATE_IMAGE_ASPECT_RATIO,
-        steps: REPLICATE_IMAGE_STEPS,
-        guidance: REPLICATE_IMAGE_GUIDANCE,
-        action: IMG_ACTION || null,
-      },
-      video: {
-        owner: REPLICATE_VIDEO_OWNER,
-        model: REPLICATE_VIDEO_MODEL,
-        version_id: REPLICATE_VIDEO_VERSION_ID || null,
-      },
+    image: {
+      default_provider: "replicate",
+      openai_styles: OPENAI_IMAGE_STYLES,
+      replicate_model: `${REPLICATE_IMAGE_OWNER}/${REPLICATE_IMAGE_MODEL}`,
+      replicate_aspect_ratio: REPLICATE_IMAGE_ASPECT_RATIO,
     },
+    video: { replicate_model: `${REPLICATE_VIDEO_OWNER}/${REPLICATE_VIDEO_MODEL}` },
   });
 });
 
@@ -192,92 +203,156 @@ app.get("/me", (req, res) => {
     ok: true,
     service: "doodle-magic-backend",
     version: VERSION,
-    openai: { enabled: false },
+    openai: {
+      enabled: Boolean(OPENAI_API_KEY),
+      responses_model: RESP_MODEL,
+      tool: {
+        type: "image_generation",
+        size: OA_IMG_SIZE,
+        quality: OA_IMG_QUALITY,
+        input_fidelity: OA_IMG_INPUT_FIDELITY,
+        action: OA_IMG_ACTION,
+      },
+      styles: OPENAI_IMAGE_STYLES,
+      timeout_ms: MAGIC_TIMEOUT_MS,
+    },
     replicate: {
       enabled: Boolean(REPLICATE_API_TOKEN),
       image_model: `${REPLICATE_IMAGE_OWNER}/${REPLICATE_IMAGE_MODEL}`,
-      image_version_id: REPLICATE_IMAGE_VERSION_ID || null,
-      img_input_key: IMG_INPUT_KEY,
-      image_timeout_ms: REPLICATE_IMAGE_TIMEOUT_MS,
+      image_aspect_ratio: REPLICATE_IMAGE_ASPECT_RATIO,
       video_model: `${REPLICATE_VIDEO_OWNER}/${REPLICATE_VIDEO_MODEL}`,
-      video_version_id: REPLICATE_VIDEO_VERSION_ID || null,
       video_timeout_ms: VIDEO_TIMEOUT_MS,
+      video_version_id: REPLICATE_VIDEO_VERSION_ID || null,
     },
     limits: { max_upload_mb: MAX_UPLOAD_MB },
   });
 });
 
-// ---------- POST /magic (Replicate ONLY) ----------
+// POST /magic
+// multipart/form-data: image + styleId (+ optional prompt)
 app.post("/magic", upload.single("image"), async (req, res) => {
   try {
-    if (!REPLICATE_API_TOKEN) return errJson(res, 500, "REPLICATE_API_TOKEN is not set on the server");
     if (!req.file?.buffer) return errJson(res, 400, 'No file uploaded. Use field name "image".');
 
     const styleId = String(req.body?.styleId || "magic");
     const userPrompt = getText(req, "prompt").trim();
-    const prompt = userPrompt ? `${stylePromptReplicate(styleId)}\n\nExtra request: ${userPrompt}` : stylePromptReplicate(styleId);
 
-    const imageData = bufferToDataUri(req.file.buffer, req.file.mimetype);
+    const useOpenAI = ENABLE_OPENAI_IMAGE && OPENAI_IMAGE_STYLES.includes(styleId);
 
-    // Build input with configurable image key
-    const input = {
-      prompt,
-      aspect_ratio: REPLICATE_IMAGE_ASPECT_RATIO,
-      steps: REPLICATE_IMAGE_STEPS,
-      guidance: REPLICATE_IMAGE_GUIDANCE,
-      output_format: "png",
+    // ---------- Replicate (default, cheap) ----------
+    if (!useOpenAI) {
+      if (!REPLICATE_API_TOKEN) return errJson(res, 500, "REPLICATE_API_TOKEN is not set on the server");
+
+      const imageInput = bufferToDataUri(req.file.buffer, req.file.mimetype);
+
+      const payload = {
+        input: {
+          [IMG_INPUT_KEY]: imageInput,
+          prompt: stylePromptReplicate(styleId),
+          // common optional params (ignored if unsupported)
+          aspect_ratio: REPLICATE_IMAGE_ASPECT_RATIO,
+          num_outputs: REPLICATE_IMAGE_NUM_OUTPUTS,
+          guidance: REPLICATE_IMAGE_GUIDANCE,
+          steps: REPLICATE_IMAGE_STEPS,
+          output_format: "png",
+        },
+      };
+
+      const startUrl = `https://api.replicate.com/v1/models/${REPLICATE_IMAGE_OWNER}/${REPLICATE_IMAGE_MODEL}/predictions`;
+      const resp = await fetchWithTimeout(
+        startUrl,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${REPLICATE_API_TOKEN}`,
+            "Content-Type": "application/json",
+            Prefer: "wait=60",
+          },
+          body: JSON.stringify(payload),
+        },
+        REPLICATE_IMAGE_TIMEOUT_MS
+      );
+
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok) return errJson(res, resp.status, "Replicate image failed", { detail: data });
+
+      const outUrl = pickFirstOutput(data?.output);
+      if (!outUrl) return errJson(res, 500, "Replicate image output missing", { detail: data });
+
+      const imgResp = await fetchWithTimeout(outUrl, { method: "GET" }, 60000);
+      if (!imgResp.ok) {
+        const t = (await imgResp.text()).slice(0, 1000);
+        return errJson(res, 500, "Failed to download Replicate image", { status: imgResp.status, detail: t });
+      }
+
+      const arr = new Uint8Array(await imgResp.arrayBuffer());
+      const imgBuf = Buffer.from(arr);
+
+      res.setHeader("X-DM-Image-Provider", "replicate");
+      res.setHeader("X-DM-StyleId", styleId);
+      res.setHeader("X-DM-Replicate-Model", `${REPLICATE_IMAGE_OWNER}/${REPLICATE_IMAGE_MODEL}`);
+      res.setHeader("X-DM-Replicate-Aspect-Ratio", REPLICATE_IMAGE_ASPECT_RATIO);
+
+      res.setHeader("Content-Type", "image/png");
+      res.setHeader("Cache-Control", "no-store");
+      return res.status(200).send(imgBuf);
+    }
+
+    // ---------- OpenAI (premium, expensive) ----------
+    if (!OPENAI_API_KEY) return errJson(res, 500, "OPENAI_API_KEY is not set on the server");
+
+    const imageUrl = bufferToDataUri(req.file.buffer, req.file.mimetype);
+
+    const payload = {
+      model: RESP_MODEL,
+      input: [
+        {
+          role: "user",
+          content: [
+            { type: "input_text", text: stylePromptOpenAI(styleId, userPrompt) },
+            { type: "input_image", image_url: imageUrl },
+          ],
+        },
+      ],
+      tools: [
+        {
+          type: "image_generation",
+          size: OA_IMG_SIZE,
+          quality: OA_IMG_QUALITY,
+          input_fidelity: OA_IMG_INPUT_FIDELITY,
+          action: OA_IMG_ACTION,
+          output_format: "png",
+        },
+      ],
     };
 
-    // put image into the key model expects
-    input[IMG_INPUT_KEY] = imageData;
-
-    // optional action
-    if (IMG_ACTION) input["action"] = IMG_ACTION;
-
-    // Start URL (official vs community)
-    const isCommunity = Boolean(REPLICATE_IMAGE_VERSION_ID);
-    const url = isCommunity
-      ? "https://api.replicate.com/v1/predictions"
-      : `https://api.replicate.com/v1/models/${encodeURIComponent(REPLICATE_IMAGE_OWNER)}/${encodeURIComponent(REPLICATE_IMAGE_MODEL)}/predictions`;
-
-    const payload = isCommunity
-      ? { version: `${REPLICATE_IMAGE_OWNER}/${REPLICATE_IMAGE_MODEL}:${REPLICATE_IMAGE_VERSION_ID}`, input }
-      : { input };
-
-    const resp = await fetchWithTimeout(
-      url,
+    const oaResp = await fetchWithTimeout(
+      "https://api.openai.com/v1/responses",
       {
         method: "POST",
         headers: {
-          Authorization: `Bearer ${REPLICATE_API_TOKEN}`,
+          Authorization: `Bearer ${OPENAI_API_KEY}`,
           "Content-Type": "application/json",
-          Prefer: "wait=60",
         },
         body: JSON.stringify(payload),
       },
-      REPLICATE_IMAGE_TIMEOUT_MS
+      MAGIC_TIMEOUT_MS
     );
 
-    const data = await resp.json().catch(() => ({}));
-    if (!resp.ok) return errJson(res, resp.status, "Replicate image failed", { detail: data });
-
-    const outUrl = pickFirstOutput(data?.output);
-    if (!outUrl) return errJson(res, 500, "Replicate image output missing", { detail: data });
-
-    const imgResp = await fetchWithTimeout(outUrl, { method: "GET" }, 60000);
-    if (!imgResp.ok) {
-      const t = (await imgResp.text()).slice(0, 1000);
-      return errJson(res, 500, "Failed to download Replicate image", { status: imgResp.status, detail: t });
+    if (!oaResp.ok) {
+      const detail = (await oaResp.text()).slice(0, 4000);
+      return errJson(res, oaResp.status, "OpenAI Responses image_generation failed", { detail });
     }
 
-    const arr = new Uint8Array(await imgResp.arrayBuffer());
-    const imgBuf = Buffer.from(arr);
+    const json = await oaResp.json();
+    const imgBase64 = json?.output?.find?.((o) => o?.type === "image_generation_call")?.result || null;
+    if (!imgBase64) return errJson(res, 500, "OpenAI response missing image result");
 
-    res.setHeader("X-DM-Image-Provider", "replicate");
+    const imgBuf = Buffer.from(imgBase64, "base64");
+
+    res.setHeader("X-DM-Image-Provider", "openai");
     res.setHeader("X-DM-StyleId", styleId);
-    res.setHeader("X-DM-Replicate-Model", `${REPLICATE_IMAGE_OWNER}/${REPLICATE_IMAGE_MODEL}`);
-    res.setHeader("X-DM-Img-Input-Key", IMG_INPUT_KEY);
-    res.setHeader("X-DM-Aspect-Ratio", REPLICATE_IMAGE_ASPECT_RATIO);
+    res.setHeader("X-DM-Responses-Model", RESP_MODEL);
 
     res.setHeader("Content-Type", "image/png");
     res.setHeader("Cache-Control", "no-store");
@@ -288,7 +363,7 @@ app.post("/magic", upload.single("image"), async (req, res) => {
   }
 });
 
-// ---------- Video ----------
+// ---------- Video (unchanged) ----------
 // POST /video/start
 app.post("/video/start", upload.single("image"), async (req, res) => {
   try {
@@ -320,7 +395,7 @@ app.post("/video/start", upload.single("image"), async (req, res) => {
 
     const url = isCommunity
       ? "https://api.replicate.com/v1/predictions"
-      : `https://api.replicate.com/v1/models/${encodeURIComponent(REPLICATE_VIDEO_OWNER)}/${encodeURIComponent(REPLICATE_VIDEO_MODEL)}/predictions`;
+      : `https://api.replicate.com/v1/models/${REPLICATE_VIDEO_OWNER}/${REPLICATE_VIDEO_MODEL}/predictions`;
 
     const input = {
       image: imageInput,
@@ -332,7 +407,9 @@ app.post("/video/start", upload.single("image"), async (req, res) => {
       sample_guide_scale: guidance,
     };
 
-    const payload = isCommunity ? { version: `${modelFull}:${REPLICATE_VIDEO_VERSION_ID}`, input } : { input };
+    const payload = isCommunity
+      ? { version: `${modelFull}:${REPLICATE_VIDEO_VERSION_ID}`, input }
+      : { input };
 
     const resp = await fetchWithTimeout(
       url,
@@ -349,7 +426,9 @@ app.post("/video/start", upload.single("image"), async (req, res) => {
     );
 
     const data = await resp.json().catch(() => ({}));
-    if (!resp.ok) return errJson(res, resp.status, "Replicate start failed", { status: resp.status, detail: data });
+    if (!resp.ok) {
+      return errJson(res, resp.status, "Replicate start failed", { status: resp.status, detail: data });
+    }
 
     return res.json({ ok: true, id: data?.id, status: data?.status });
   } catch (e) {
@@ -369,10 +448,12 @@ app.get("/video/status", async (req, res) => {
     const url = `https://api.replicate.com/v1/predictions/${encodeURIComponent(id)}`;
     const resp = await fetchWithTimeout(url, { headers: { Authorization: `Bearer ${REPLICATE_API_TOKEN}` } }, 30000);
     const data = await resp.json().catch(() => ({}));
-    if (!resp.ok) return errJson(res, resp.status, "Replicate status failed", { status: resp.status, detail: data });
+    if (!resp.ok) {
+      return errJson(res, resp.status, "Replicate status failed", { status: resp.status, detail: data });
+    }
 
     if (data?.status === "succeeded") {
-      const output = Array.isArray(data.output) ? data.output[0] || null : data.output || null;
+      const output = Array.isArray(data.output) ? (data.output[0] || null) : (data.output || null);
       return res.json({ ok: true, status: "succeeded", output });
     }
 
