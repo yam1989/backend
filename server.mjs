@@ -1,5 +1,5 @@
 // DM-2026 backend (Replicate-only) — Node 20 + Express
-// Keep endpoints (DO NOT BREAK):
+// Endpoints (DO NOT BREAK):
 // POST /magic (multipart: image + styleId)
 // GET  /magic/status?id=...
 // POST /video/start
@@ -20,7 +20,7 @@ const REPLICATE_API_TOKEN = process.env.REPLICATE_API_TOKEN || "";
 // Image model (fofr/sdxl-multi-controlnet-lora requires version)
 const REPLICATE_IMAGE_OWNER = process.env.REPLICATE_IMAGE_OWNER || "fofr";
 const REPLICATE_IMAGE_MODEL = process.env.REPLICATE_IMAGE_MODEL || "sdxl-multi-controlnet-lora";
-const REPLICATE_IMAGE_VERSION = process.env.REPLICATE_IMAGE_VERSION || ""; // REQUIRED for this model
+const REPLICATE_IMAGE_VERSION = process.env.REPLICATE_IMAGE_VERSION || ""; // REQUIRED
 
 const IMG_INPUT_KEY = process.env.IMG_INPUT_KEY || "image";
 const IMG_PROMPT_KEY = process.env.IMG_PROMPT_KEY || "prompt";
@@ -44,10 +44,10 @@ const IMAGE_FALLBACK_CONTROLNET_1 = process.env.IMAGE_FALLBACK_CONTROLNET_1 || "
 const IMAGE_FALLBACK_CONTROLNET_1_SCALE = parseFloat(process.env.IMAGE_FALLBACK_CONTROLNET_1_SCALE || "0.85");
 const IMAGE_FALLBACK_PROMPT_STRENGTH = parseFloat(process.env.IMAGE_FALLBACK_PROMPT_STRENGTH || "0.60");
 
-// Video model (some versions now also require version; allow pin via env)
+// Video model (some deployments require version; allow pin via env)
 const REPLICATE_VIDEO_OWNER = process.env.REPLICATE_VIDEO_OWNER || "wan-video";
 const REPLICATE_VIDEO_MODEL = process.env.REPLICATE_VIDEO_MODEL || "wan-2.2-i2v-fast";
-const REPLICATE_VIDEO_VERSION = process.env.REPLICATE_VIDEO_VERSION || ""; // SET THIS if you see "version is required / model not allowed"
+const REPLICATE_VIDEO_VERSION = process.env.REPLICATE_VIDEO_VERSION || ""; // strongly recommended
 
 const VIDEO_INPUT_KEY = process.env.VIDEO_INPUT_KEY || "image";
 const VIDEO_PROMPT_KEY = process.env.VIDEO_PROMPT_KEY || "prompt";
@@ -100,7 +100,6 @@ function getMagicPrompt(styleId) {
 }
 
 async function replicateCreatePrediction({ owner, model, version, input }) {
-  // Some models REQUIRE `version` and reject `model`.
   const body = version ? { version, input } : { model: `${owner}/${model}`, input };
 
   const r = await fetch("https://api.replicate.com/v1/predictions", {
@@ -132,31 +131,71 @@ async function replicateGetPrediction(id) {
 function normalizeOutputUrl(output) {
   if (!output) return null;
 
-  // Most common: string or [string]
+  // string
   if (typeof output === "string") return output;
+
+  // array
   if (Array.isArray(output) && output.length) {
     const first = output[0];
     if (typeof first === "string") return first;
     if (first && typeof first === "object") {
-      // sometimes array of objects
       if (typeof first.url === "string") return first.url;
+      if (typeof first.uri === "string") return first.uri;
       if (typeof first.image === "string") return first.image;
+      if (typeof first.video === "string") return first.video;
+      if (typeof first.mp4 === "string") return first.mp4;
+      if (typeof first.file === "string") return first.file;
     }
   }
 
-  // Sometimes output is object: { image: "url" } or { images: ["url"] }
+  // object with common keys
   if (typeof output === "object") {
-    if (typeof output.url === "string") return output.url;
-    if (typeof output.image === "string") return output.image;
-    if (Array.isArray(output.images) && output.images.length && typeof output.images[0] === "string") return output.images[0];
-    if (Array.isArray(output.output) && output.output.length && typeof output.output[0] === "string") return output.output[0];
+    const keys = [
+      "url", "uri", "image", "video", "mp4", "gif", "file",
+      "output", "result",
+    ];
+    for (const k of keys) {
+      if (typeof output[k] === "string") return output[k];
+    }
+
+    const arrKeys = ["images", "videos", "files", "outputs", "results"];
+    for (const k of arrKeys) {
+      if (Array.isArray(output[k]) && output[k].length) {
+        const v = output[k][0];
+        if (typeof v === "string") return v;
+        if (v && typeof v === "object") {
+          if (typeof v.url === "string") return v.url;
+          if (typeof v.uri === "string") return v.uri;
+          if (typeof v.video === "string") return v.video;
+          if (typeof v.image === "string") return v.image;
+          if (typeof v.file === "string") return v.file;
+        }
+      }
+    }
+
+    // Replicate sometimes returns { segments: [{ uri: ... }] }
+    if (Array.isArray(output.segments) && output.segments.length) {
+      const s = output.segments[0];
+      if (s && typeof s === "object") {
+        if (typeof s.url === "string") return s.url;
+        if (typeof s.uri === "string") return s.uri;
+      }
+    }
   }
 
   return null;
 }
 
-// Cache fallback mapping (no need to cache dataUri if we can reuse prediction.input)
-const magicFallbackById = new Map(); // originalId -> { fallbackId, ts }
+function outputDebugShape(output) {
+  if (output == null) return "null";
+  if (typeof output === "string") return "string";
+  if (Array.isArray(output)) return `array(len=${output.length})`;
+  if (typeof output === "object") return `object(keys=${Object.keys(output).slice(0, 8).join(",")})`;
+  return typeof output;
+}
+
+// Fallback mapping (id -> fallbackId) with TTL
+const magicFallbackById = new Map();
 const TTL_MS = 20 * 60 * 1000;
 function cacheSet(map, key, value) { map.set(key, { ...value, ts: Date.now() }); }
 function cacheGet(map, key) {
@@ -210,10 +249,14 @@ app.post("/magic", upload.single("image"), async (req, res) => {
       [IMG_PROMPT_KEY]: prompt,
       [IMG_NEG_PROMPT_KEY]: negative,
       [IMG_INPUT_KEY]: dataUri,
+
+      // model params (sdxl-like)
       num_outputs: IMAGE_NUM_OUTPUTS,
       num_inference_steps: IMAGE_STEPS,
       guidance_scale: IMAGE_GUIDANCE,
       prompt_strength: IMAGE_PROMPT_STRENGTH,
+
+      // controlnet
       controlnet_1: IMAGE_CONTROLNET_1,
       controlnet_1_image: dataUri,
       controlnet_1_conditioning_scale: IMAGE_CONTROLNET_1_SCALE,
@@ -252,17 +295,14 @@ app.get("/magic/status", async (req, res) => {
     const status = p?.status || "unknown";
     let outputUrl = status === "succeeded" ? normalizeOutputUrl(p?.output) : null;
 
-    // If succeeded but output empty -> start fallback using ORIGINAL prediction input if available
+    // If succeeded but output empty -> start fallback using original prediction input from Replicate
     if (IMAGE_ENABLE_FALLBACK && !fb && status === "succeeded" && !outputUrl) {
-      // Try to read original prediction to reuse its input image (no in-memory cache needed)
       const orig = await replicateGetPrediction(id);
       const origInput = orig?.input || {};
       const origImage = origInput?.[IMG_INPUT_KEY] || origInput?.image || origInput?.image_prompt || null;
 
       if (origImage && REPLICATE_IMAGE_VERSION) {
-        const styleId = ""; // we don't have styleId here; prompt must be robust without it
-        const { prompt, negative } = getMagicPrompt(styleId);
-
+        const { prompt, negative } = getMagicPrompt("");
         const input = {
           [IMG_PROMPT_KEY]: prompt,
           [IMG_NEG_PROMPT_KEY]: negative,
@@ -300,10 +340,22 @@ app.get("/magic/status", async (req, res) => {
     }
 
     if (status === "succeeded" && !outputUrl) {
-      return res.status(200).json({ ok: true, status, outputUrl: null, error: "Prediction succeeded but output is empty" });
+      return res.status(200).json({
+        ok: true,
+        status,
+        outputUrl: null,
+        error: "Prediction succeeded but output is empty",
+        debug: { outputShape: outputDebugShape(p?.output) },
+      });
     }
 
-    res.status(200).json({ ok: true, status, outputUrl, error: p?.error || null });
+    res.status(200).json({
+      ok: true,
+      status,
+      outputUrl,
+      error: p?.error || null,
+      debug: { outputShape: outputDebugShape(p?.output) },
+    });
   } catch (e) {
     res.status(500).json({ ok: false, error: String(e?.message || e) });
   }
@@ -335,7 +387,6 @@ app.post("/video/start", upload.single("image"), async (req, res) => {
       interpolate: VIDEO_INTERPOLATE,
     };
 
-    // If video endpoint returns "version is required / model not allowed" -> set REPLICATE_VIDEO_VERSION
     const p = await replicateCreatePrediction({
       owner: REPLICATE_VIDEO_OWNER,
       model: REPLICATE_VIDEO_MODEL,
@@ -361,7 +412,24 @@ app.get("/video/status", async (req, res) => {
     const status = p?.status || "unknown";
     const outputUrl = status === "succeeded" ? normalizeOutputUrl(p?.output) : null;
 
-    res.status(200).json({ ok: true, status, outputUrl, error: p?.error || null });
+    if (status === "succeeded" && !outputUrl) {
+      // Make the failure explicit for the client
+      return res.status(200).json({
+        ok: true,
+        status: "failed",
+        outputUrl: null,
+        error: "Prediction succeeded but output video url is empty",
+        debug: { outputShape: outputDebugShape(p?.output) },
+      });
+    }
+
+    res.status(200).json({
+      ok: true,
+      status,
+      outputUrl,
+      error: p?.error || null,
+      debug: { outputShape: outputDebugShape(p?.output) },
+    });
   } catch (e) {
     res.status(500).json({ ok: false, error: String(e?.message || e) });
   }
