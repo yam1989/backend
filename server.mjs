@@ -1,12 +1,10 @@
 // DM-2026 backend (Replicate-only) — Node 20 + Express
-// Keep existing endpoints (DO NOT BREAK):
-//   POST /magic (multipart: image + styleId)
-//   POST /video/start (multipart: image + prompt?)
-//   GET  /video/status?id=...
-//   GET  /, /health, /me
-//
-// Also used by Flutter polling:
-//   GET /magic/status?id=...
+// Keep endpoints (DO NOT BREAK):
+// POST /magic (multipart: image + styleId)
+// GET  /magic/status?id=...
+// POST /video/start
+// GET  /video/status?id=...
+// GET  /, /health, /me
 
 import express from "express";
 import multer from "multer";
@@ -19,7 +17,7 @@ const PORT = parseInt(process.env.PORT || "8080", 10);
 // ---------- ENV ----------
 const REPLICATE_API_TOKEN = process.env.REPLICATE_API_TOKEN || "";
 
-// Image model: fofr/sdxl-multi-controlnet-lora (requires version hash)
+// Image model (fofr/sdxl-multi-controlnet-lora requires version)
 const REPLICATE_IMAGE_OWNER = process.env.REPLICATE_IMAGE_OWNER || "fofr";
 const REPLICATE_IMAGE_MODEL = process.env.REPLICATE_IMAGE_MODEL || "sdxl-multi-controlnet-lora";
 const REPLICATE_IMAGE_VERSION = process.env.REPLICATE_IMAGE_VERSION || ""; // REQUIRED for this model
@@ -41,16 +39,15 @@ const IMAGE_WIDTH = parseInt(process.env.IMAGE_WIDTH || "0", 10);
 const IMAGE_HEIGHT = parseInt(process.env.IMAGE_HEIGHT || "0", 10);
 const IMAGE_NUM_OUTPUTS = parseInt(process.env.IMAGE_NUM_OUTPUTS || "1", 10);
 
-// Auto-fallback when Replicate says succeeded but output is empty
 const IMAGE_ENABLE_FALLBACK = (process.env.IMAGE_ENABLE_FALLBACK || "true").toLowerCase() === "true";
 const IMAGE_FALLBACK_CONTROLNET_1 = process.env.IMAGE_FALLBACK_CONTROLNET_1 || "canny";
 const IMAGE_FALLBACK_CONTROLNET_1_SCALE = parseFloat(process.env.IMAGE_FALLBACK_CONTROLNET_1_SCALE || "0.85");
 const IMAGE_FALLBACK_PROMPT_STRENGTH = parseFloat(process.env.IMAGE_FALLBACK_PROMPT_STRENGTH || "0.60");
 
-// Video model (as per your working setup)
+// Video model (some versions now also require version; allow pin via env)
 const REPLICATE_VIDEO_OWNER = process.env.REPLICATE_VIDEO_OWNER || "wan-video";
 const REPLICATE_VIDEO_MODEL = process.env.REPLICATE_VIDEO_MODEL || "wan-2.2-i2v-fast";
-const REPLICATE_VIDEO_VERSION = process.env.REPLICATE_VIDEO_VERSION || ""; // optional pin
+const REPLICATE_VIDEO_VERSION = process.env.REPLICATE_VIDEO_VERSION || ""; // SET THIS if you see "version is required / model not allowed"
 
 const VIDEO_INPUT_KEY = process.env.VIDEO_INPUT_KEY || "image";
 const VIDEO_PROMPT_KEY = process.env.VIDEO_PROMPT_KEY || "prompt";
@@ -61,14 +58,10 @@ const VIDEO_NUM_FRAMES = parseInt(process.env.VIDEO_NUM_FRAMES || "81", 10);
 const VIDEO_GO_FAST = (process.env.VIDEO_GO_FAST || "true").toLowerCase() === "true";
 const VIDEO_INTERPOLATE = (process.env.VIDEO_INTERPOLATE || "false").toLowerCase() === "true";
 
-// Optional per-style prompt map
 const STYLE_PROMPTS_JSON = process.env.STYLE_PROMPTS_JSON || "";
 
 // ---------- Upload ----------
-const upload = multer({
-  storage: multer.memoryStorage(),
-  limits: { fileSize: 15 * 1024 * 1024 },
-});
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 15 * 1024 * 1024 } });
 
 // ---------- Helpers ----------
 function okEnv(res) {
@@ -107,14 +100,12 @@ function getMagicPrompt(styleId) {
 }
 
 async function replicateCreatePrediction({ owner, model, version, input }) {
+  // Some models REQUIRE `version` and reject `model`.
   const body = version ? { version, input } : { model: `${owner}/${model}`, input };
 
   const r = await fetch("https://api.replicate.com/v1/predictions", {
     method: "POST",
-    headers: {
-      Authorization: `Token ${REPLICATE_API_TOKEN}`,
-      "Content-Type": "application/json",
-    },
+    headers: { Authorization: `Token ${REPLICATE_API_TOKEN}`, "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
 
@@ -140,29 +131,38 @@ async function replicateGetPrediction(id) {
 
 function normalizeOutputUrl(output) {
   if (!output) return null;
+
+  // Most common: string or [string]
   if (typeof output === "string") return output;
   if (Array.isArray(output) && output.length) {
     const first = output[0];
     if (typeof first === "string") return first;
+    if (first && typeof first === "object") {
+      // sometimes array of objects
+      if (typeof first.url === "string") return first.url;
+      if (typeof first.image === "string") return first.image;
+    }
   }
+
+  // Sometimes output is object: { image: "url" } or { images: ["url"] }
+  if (typeof output === "object") {
+    if (typeof output.url === "string") return output.url;
+    if (typeof output.image === "string") return output.image;
+    if (Array.isArray(output.images) && output.images.length && typeof output.images[0] === "string") return output.images[0];
+    if (Array.isArray(output.output) && output.output.length && typeof output.output[0] === "string") return output.output[0];
+  }
+
   return null;
 }
 
-// --- Best-effort cache for fallback ---
-const magicPayloadById = new Map();
-const magicFallbackById = new Map();
+// Cache fallback mapping (no need to cache dataUri if we can reuse prediction.input)
+const magicFallbackById = new Map(); // originalId -> { fallbackId, ts }
 const TTL_MS = 20 * 60 * 1000;
-
-function cacheSet(map, key, value) {
-  map.set(key, { ...value, ts: Date.now() });
-}
+function cacheSet(map, key, value) { map.set(key, { ...value, ts: Date.now() }); }
 function cacheGet(map, key) {
   const v = map.get(key);
   if (!v) return null;
-  if (Date.now() - v.ts > TTL_MS) {
-    map.delete(key);
-    return null;
-  }
+  if (Date.now() - v.ts > TTL_MS) { map.delete(key); return null; }
   return v;
 }
 
@@ -189,16 +189,12 @@ app.get("/me", (_req, res) => {
   });
 });
 
-// POST /magic
+// POST /magic (multipart: image + styleId)
 app.post("/magic", upload.single("image"), async (req, res) => {
   try {
     if (!okEnv(res)) return;
-
     if (!REPLICATE_IMAGE_VERSION) {
-      return res.status(500).json({
-        ok: false,
-        error: "REPLICATE_IMAGE_VERSION is not set (required for this image model)",
-      });
+      return res.status(500).json({ ok: false, error: "REPLICATE_IMAGE_VERSION is not set (required for this image model)" });
     }
 
     const file = req.file;
@@ -214,12 +210,10 @@ app.post("/magic", upload.single("image"), async (req, res) => {
       [IMG_PROMPT_KEY]: prompt,
       [IMG_NEG_PROMPT_KEY]: negative,
       [IMG_INPUT_KEY]: dataUri,
-
       num_outputs: IMAGE_NUM_OUTPUTS,
       num_inference_steps: IMAGE_STEPS,
       guidance_scale: IMAGE_GUIDANCE,
       prompt_strength: IMAGE_PROMPT_STRENGTH,
-
       controlnet_1: IMAGE_CONTROLNET_1,
       controlnet_1_image: dataUri,
       controlnet_1_conditioning_scale: IMAGE_CONTROLNET_1_SCALE,
@@ -237,7 +231,6 @@ app.post("/magic", upload.single("image"), async (req, res) => {
       input,
     });
 
-    cacheSet(magicPayloadById, p.id, { dataUri, styleId });
     res.status(200).json({ ok: true, id: p.id });
   } catch (e) {
     res.status(500).json({ ok: false, error: String(e?.message || e) });
@@ -259,23 +252,27 @@ app.get("/magic/status", async (req, res) => {
     const status = p?.status || "unknown";
     let outputUrl = status === "succeeded" ? normalizeOutputUrl(p?.output) : null;
 
+    // If succeeded but output empty -> start fallback using ORIGINAL prediction input if available
     if (IMAGE_ENABLE_FALLBACK && !fb && status === "succeeded" && !outputUrl) {
-      const payload = cacheGet(magicPayloadById, id);
-      if (payload?.dataUri && REPLICATE_IMAGE_VERSION) {
-        const { prompt, negative } = getMagicPrompt(payload.styleId || "");
+      // Try to read original prediction to reuse its input image (no in-memory cache needed)
+      const orig = await replicateGetPrediction(id);
+      const origInput = orig?.input || {};
+      const origImage = origInput?.[IMG_INPUT_KEY] || origInput?.image || origInput?.image_prompt || null;
+
+      if (origImage && REPLICATE_IMAGE_VERSION) {
+        const styleId = ""; // we don't have styleId here; prompt must be robust without it
+        const { prompt, negative } = getMagicPrompt(styleId);
 
         const input = {
           [IMG_PROMPT_KEY]: prompt,
           [IMG_NEG_PROMPT_KEY]: negative,
-          [IMG_INPUT_KEY]: payload.dataUri,
-
+          [IMG_INPUT_KEY]: origImage,
           num_outputs: 1,
           num_inference_steps: IMAGE_STEPS,
           guidance_scale: IMAGE_GUIDANCE,
           prompt_strength: IMAGE_FALLBACK_PROMPT_STRENGTH,
-
           controlnet_1: IMAGE_FALLBACK_CONTROLNET_1,
-          controlnet_1_image: payload.dataUri,
+          controlnet_1_image: origImage,
           controlnet_1_conditioning_scale: IMAGE_FALLBACK_CONTROLNET_1_SCALE,
           controlnet_1_start: 0.0,
           controlnet_1_end: 1.0,
@@ -303,26 +300,16 @@ app.get("/magic/status", async (req, res) => {
     }
 
     if (status === "succeeded" && !outputUrl) {
-      return res.status(200).json({
-        ok: true,
-        status,
-        outputUrl: null,
-        error: "Prediction succeeded but output is empty",
-      });
+      return res.status(200).json({ ok: true, status, outputUrl: null, error: "Prediction succeeded but output is empty" });
     }
 
-    res.status(200).json({
-      ok: true,
-      status,
-      outputUrl,
-      error: p?.error || null,
-    });
+    res.status(200).json({ ok: true, status, outputUrl, error: p?.error || null });
   } catch (e) {
     res.status(500).json({ ok: false, error: String(e?.message || e) });
   }
 });
 
-// POST /video/start
+// POST /video/start (multipart: image + prompt?)
 app.post("/video/start", upload.single("image"), async (req, res) => {
   try {
     if (!okEnv(res)) return;
@@ -341,7 +328,6 @@ app.post("/video/start", upload.single("image"), async (req, res) => {
     const input = {
       [VIDEO_INPUT_KEY]: dataUri,
       [VIDEO_PROMPT_KEY]: prompt,
-
       resolution: VIDEO_RESOLUTION,
       frames_per_second: VIDEO_FPS,
       num_frames: VIDEO_NUM_FRAMES,
@@ -349,6 +335,7 @@ app.post("/video/start", upload.single("image"), async (req, res) => {
       interpolate: VIDEO_INTERPOLATE,
     };
 
+    // If video endpoint returns "version is required / model not allowed" -> set REPLICATE_VIDEO_VERSION
     const p = await replicateCreatePrediction({
       owner: REPLICATE_VIDEO_OWNER,
       model: REPLICATE_VIDEO_MODEL,
@@ -374,12 +361,7 @@ app.get("/video/status", async (req, res) => {
     const status = p?.status || "unknown";
     const outputUrl = status === "succeeded" ? normalizeOutputUrl(p?.output) : null;
 
-    res.status(200).json({
-      ok: true,
-      status,
-      outputUrl,
-      error: p?.error || null,
-    });
+    res.status(200).json({ ok: true, status, outputUrl, error: p?.error || null });
   } catch (e) {
     res.status(500).json({ ok: false, error: String(e?.message || e) });
   }
