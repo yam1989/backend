@@ -1,52 +1,49 @@
 // DM-2026 backend (Replicate-only) — Node 20 + Express
-// Image: Flux (Replicate) within ~<= $0.05 target (tuned via env)
-// Video: Wan 2.2 i2v fast (unchanged)
+// OPTION A: Flux via owner/model (NO REPLICATE_IMAGE_VERSION required)
+// Video unchanged (wan-2.2-i2v-fast)
 //
-// DO NOT BREAK existing endpoints:
+// Endpoints (DO NOT BREAK):
 // POST /magic (multipart: image + styleId)
 // GET  /magic/status?id=...
 // POST /video/start
 // GET  /video/status?id=...
 // GET  /, /health, /me
-//
-// Notes:
-// - If REPLICATE_IMAGE_VERSION is set, we send {version,input} ONLY (no "model" field).
-// - If REPLICATE_VIDEO_VERSION is set, we send {version,input} ONLY (no "model" field).
-// - /magic/status picks final image URL (avoids control/conditioning outputs if present).
 
 import express from "express";
 import multer from "multer";
 
 const app = express();
 app.disable("x-powered-by");
-const PORT = parseInt(process.env.PORT || "8080", 10);
+const PORT = Number(process.env.PORT || 8080);
 
+// -------------------- AUTH --------------------
 const REPLICATE_API_TOKEN = process.env.REPLICATE_API_TOKEN || "";
 
 // -------------------- IMAGE (Flux) --------------------
+// No version required in this variant.
 const REPLICATE_IMAGE_OWNER = process.env.REPLICATE_IMAGE_OWNER || "black-forest-labs";
-const REPLICATE_IMAGE_MODEL = process.env.REPLICATE_IMAGE_MODEL || "flux-1.1-pro"; // recommended for <= $0.05 target
-const REPLICATE_IMAGE_VERSION = process.env.REPLICATE_IMAGE_VERSION || ""; // strongly recommended to pin
+const REPLICATE_IMAGE_MODEL = process.env.REPLICATE_IMAGE_MODEL || "flux-1.1-pro";
 
-// Flux input keys (keep configurable)
-const IMG_INPUT_KEY = process.env.IMG_INPUT_KEY || "image_prompt"; // flux i2i commonly uses image_prompt
+// Flux input keys (configurable)
+const IMG_INPUT_KEY = process.env.IMG_INPUT_KEY || "image_prompt";
 const IMG_PROMPT_KEY = process.env.IMG_PROMPT_KEY || "prompt";
 const IMG_NEG_PROMPT_KEY = process.env.IMG_NEG_PROMPT_KEY || "negative_prompt";
 
-// Quality/price tuning (defaults tuned for <= ~$0.05)
+// Quality/price tuning (aim <= ~$0.05)
 const IMAGE_STEPS = parseInt(process.env.IMAGE_STEPS || "22", 10);
 const IMAGE_GUIDANCE = parseFloat(process.env.IMAGE_GUIDANCE || "4.0");
-const IMAGE_PROMPT_STRENGTH = parseFloat(process.env.IMAGE_PROMPT_STRENGTH || "0.40"); // lower = preserves drawing more
+const IMAGE_PROMPT_STRENGTH = parseFloat(process.env.IMAGE_PROMPT_STRENGTH || "0.40");
 const IMAGE_ASPECT_RATIO = process.env.IMAGE_ASPECT_RATIO || "3:2";
 const IMAGE_OUTPUT_FORMAT = process.env.IMAGE_OUTPUT_FORMAT || "png";
 
-// Optional style map (stringified JSON: {"styleId":"extra prompt"})
+// Optional style map
 const STYLE_PROMPTS_JSON = process.env.STYLE_PROMPTS_JSON || "";
 
 // -------------------- VIDEO (Wan) --------------------
 const REPLICATE_VIDEO_OWNER = process.env.REPLICATE_VIDEO_OWNER || "wan-video";
 const REPLICATE_VIDEO_MODEL = process.env.REPLICATE_VIDEO_MODEL || "wan-2.2-i2v-fast";
-const REPLICATE_VIDEO_VERSION = process.env.REPLICATE_VIDEO_VERSION || ""; // optional pin
+// version optional for video (but not required)
+const REPLICATE_VIDEO_VERSION = process.env.REPLICATE_VIDEO_VERSION || "";
 
 const VIDEO_INPUT_KEY = process.env.VIDEO_INPUT_KEY || "image";
 const VIDEO_PROMPT_KEY = process.env.VIDEO_PROMPT_KEY || "prompt";
@@ -87,10 +84,9 @@ function parseStyleExtra(styleId) {
 }
 
 function magicPrompts(styleId) {
-  // Strong structure-preserving prompt
   const base =
     "Premium kids illustration redraw. Preserve the exact composition, pose, proportions, and shapes from the input drawing. " +
-    "Keep the same objects and their positions 1:1. Clean crisp outlines, smooth solid color fills, gentle soft shading. " +
+    "Keep the same objects and positions 1:1. Clean crisp outlines, smooth solid color fills, gentle soft shading. " +
     "No paper texture, no scan noise, no blur. Center the drawing. No zoom. No crop. No new objects.";
   const neg =
     "photorealistic, photo, paper texture, scan artifacts, watermark, text, letters, numbers, logo, border, frame, " +
@@ -99,8 +95,8 @@ function magicPrompts(styleId) {
   return { prompt: `${base} ${extra}`.trim(), negative: neg };
 }
 
-async function replicateCreatePrediction({ owner, model, version, input }) {
-  const body = version ? { version, input } : { model: `${owner}/${model}`, input };
+async function replicateCreatePrediction({ model, version, input }) {
+  const body = version ? { version, input } : { model, input };
 
   const r = await fetch("https://api.replicate.com/v1/predictions", {
     method: "POST",
@@ -149,12 +145,8 @@ function pickBestImageUrl(output) {
   const imageUrls = urls.filter((u) => /\.(png|jpg|jpeg|webp)(\?|$)/i.test(u));
   const pool = imageUrls.length ? imageUrls : urls;
 
-  // Avoid control/conditioning maps (just in case)
-  const good = pool.filter((u) => !/control-|conditioning|canny|hed|lineart|soft_edge|depth|mask/i.test(u));
-  const bestPool = good.length ? good : pool;
-
-  const preferred = bestPool.find((u) => /out-|output|result|final/i.test(u));
-  return preferred || bestPool[0] || null;
+  const preferred = pool.find((u) => /out-|output|result|final/i.test(u));
+  return preferred || pool[0] || null;
 }
 
 function pickBestUrl(output) {
@@ -173,7 +165,7 @@ app.get("/me", (_req, res) =>
     image: {
       owner: REPLICATE_IMAGE_OWNER,
       model: REPLICATE_IMAGE_MODEL,
-      versionPinned: Boolean(REPLICATE_IMAGE_VERSION),
+      versionPinned: false,
       targetCents: 5,
     },
     video: {
@@ -192,12 +184,6 @@ app.post("/magic", upload.single("image"), async (req, res) => {
     const file = req.file;
     if (!file?.buffer?.length) return res.status(400).json({ ok: false, error: "Missing image" });
 
-    // Optional but recommended: pin image version for predictable results.
-    if (!REPLICATE_IMAGE_VERSION) {
-      // We still allow model mode, but warn in error message to avoid confusion.
-      console.log("[DM-2026] WARN: REPLICATE_IMAGE_VERSION not set for image model; using owner/model");
-    }
-
     const styleId = (req.body?.styleId || "").toString().trim();
     const dataUri = bufferToDataUri(file.buffer, file.mimetype);
 
@@ -208,19 +194,17 @@ app.post("/magic", upload.single("image"), async (req, res) => {
       [IMG_PROMPT_KEY]: prompt,
       [IMG_NEG_PROMPT_KEY]: negative,
 
-      // Flux-ish knobs (ignored by models that don't support them)
+      // Flux-ish knobs (ignored if unsupported)
       aspect_ratio: IMAGE_ASPECT_RATIO,
       output_format: IMAGE_OUTPUT_FORMAT,
-
       num_inference_steps: IMAGE_STEPS,
       guidance_scale: IMAGE_GUIDANCE,
       prompt_strength: IMAGE_PROMPT_STRENGTH,
     };
 
     const p = await replicateCreatePrediction({
-      owner: REPLICATE_IMAGE_OWNER,
-      model: REPLICATE_IMAGE_MODEL,
-      version: REPLICATE_IMAGE_VERSION || undefined,
+      model: `${REPLICATE_IMAGE_OWNER}/${REPLICATE_IMAGE_MODEL}`,
+      version: undefined,
       input,
     });
 
@@ -240,7 +224,6 @@ app.get("/magic/status", async (req, res) => {
 
     const p = await replicateGetPrediction(id);
     const status = p?.status || "unknown";
-
     const outputUrl = status === "succeeded" ? pickBestImageUrl(p?.output) : null;
 
     res.status(200).json({
@@ -279,8 +262,7 @@ app.post("/video/start", upload.single("image"), async (req, res) => {
     };
 
     const p = await replicateCreatePrediction({
-      owner: REPLICATE_VIDEO_OWNER,
-      model: REPLICATE_VIDEO_MODEL,
+      model: `${REPLICATE_VIDEO_OWNER}/${REPLICATE_VIDEO_MODEL}`,
       version: REPLICATE_VIDEO_VERSION || undefined,
       input,
     });
@@ -301,7 +283,6 @@ app.get("/video/status", async (req, res) => {
 
     const p = await replicateGetPrediction(id);
     const status = p?.status || "unknown";
-
     const outputUrl = status === "succeeded" ? pickBestUrl(p?.output) : null;
 
     res.status(200).json({
@@ -315,6 +296,4 @@ app.get("/video/status", async (req, res) => {
   }
 });
 
-app.listen(PORT, "0.0.0.0", () =>
-  console.log(`✅ DM-2026 backend listening on http://0.0.0.0:${PORT}`)
-);
+app.listen(PORT, "0.0.0.0", () => console.log(`✅ DM-2026 backend listening on http://0.0.0.0:${PORT}`));
