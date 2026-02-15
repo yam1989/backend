@@ -1,6 +1,9 @@
 // DM-2026 backend (Replicate-only) — Node 20 + Express
-// Image: black-forest-labs/flux-1.1-pro (NO version, uses model only)
-// Video: wan-video/wan-2.2-i2v-fast (unchanged)
+// FIX: Replicate API has two create endpoints:
+//   - By VERSION: POST https://api.replicate.com/v1/predictions  { version, input }
+//   - By MODEL:   POST https://api.replicate.com/v1/models/{owner}/{model}/predictions { input }
+// Some models (like flux-1.1-pro) must be called via the MODEL endpoint (no version exposed).
+//
 // Endpoints (DO NOT BREAK):
 // POST /magic (multipart: image + styleId)
 // GET  /magic/status?id=...
@@ -22,9 +25,6 @@ const REPLICATE_API_TOKEN = process.env.REPLICATE_API_TOKEN || "";
 const REPLICATE_IMAGE_OWNER = process.env.REPLICATE_IMAGE_OWNER || "black-forest-labs";
 const REPLICATE_IMAGE_MODEL = process.env.REPLICATE_IMAGE_MODEL || "flux-1.1-pro";
 
-// Flux schema keys (from Replicate API page)
-const IMG_PROMPT_KEY = "prompt";
-const IMG_IMAGE_PROMPT_KEY = "image_prompt";
 const IMAGE_ASPECT_RATIO = process.env.IMAGE_ASPECT_RATIO || "3:2";
 const IMAGE_OUTPUT_FORMAT = process.env.IMAGE_OUTPUT_FORMAT || "png";
 const IMAGE_SAFETY_TOLERANCE = parseInt(process.env.IMAGE_SAFETY_TOLERANCE || "2", 10);
@@ -36,7 +36,7 @@ const STYLE_PROMPTS_JSON = process.env.STYLE_PROMPTS_JSON || "";
 // ---------- VIDEO (WAN) ----------
 const REPLICATE_VIDEO_OWNER = process.env.REPLICATE_VIDEO_OWNER || "wan-video";
 const REPLICATE_VIDEO_MODEL = process.env.REPLICATE_VIDEO_MODEL || "wan-2.2-i2v-fast";
-const REPLICATE_VIDEO_VERSION = process.env.REPLICATE_VIDEO_VERSION || ""; // optional pin
+const REPLICATE_VIDEO_VERSION = process.env.REPLICATE_VIDEO_VERSION || ""; // if set -> pinned by version
 
 const VIDEO_INPUT_KEY = process.env.VIDEO_INPUT_KEY || "image";
 const VIDEO_PROMPT_KEY = process.env.VIDEO_PROMPT_KEY || "prompt";
@@ -77,7 +77,7 @@ function parseStyleExtra(styleId) {
 }
 
 function fluxPrompt(styleId) {
-  // Flux не имеет "negative_prompt" и "strength", поэтому prompt должен быть очень чёткий.
+  // Flux has no negative_prompt and no strength knobs. Prompt must be explicit.
   const base =
     "Premium kids illustration redraw. Preserve the exact composition, pose, proportions, and shapes from the input drawing. " +
     "Keep the same objects and positions 1:1. Clean crisp outlines, smooth solid color fills, gentle soft shading. " +
@@ -86,16 +86,30 @@ function fluxPrompt(styleId) {
   return `${base} ${extra}`.trim();
 }
 
-async function replicateCreatePrediction(body) {
+async function replicateCreateByVersion(version, input) {
   const r = await fetch("https://api.replicate.com/v1/predictions", {
     method: "POST",
     headers: {
       Authorization: `Token ${REPLICATE_API_TOKEN}`,
       "Content-Type": "application/json",
     },
-    body: JSON.stringify(body),
+    body: JSON.stringify({ version, input }),
   });
+  const json = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(json?.detail || json?.error || r.statusText || "Replicate error");
+  return json;
+}
 
+async function replicateCreateByModel(owner, model, input) {
+  const url = `https://api.replicate.com/v1/models/${encodeURIComponent(owner)}/${encodeURIComponent(model)}/predictions`;
+  const r = await fetch(url, {
+    method: "POST",
+    headers: {
+      Authorization: `Token ${REPLICATE_API_TOKEN}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ input }),
+  });
   const json = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(json?.detail || json?.error || r.statusText || "Replicate error");
   return json;
@@ -130,7 +144,6 @@ function collectUrls(output, out = []) {
 function pickBestImageUrl(output) {
   const urls = collectUrls(output, []);
   if (!urls.length) return null;
-  // Flux обычно возвращает одну строку-URL, но оставляем универсально.
   const preferred = urls.find((u) => /out-|output|result|final/i.test(u));
   return preferred || urls[0] || null;
 }
@@ -151,7 +164,7 @@ app.get("/me", (_req, res) =>
     image: {
       owner: REPLICATE_IMAGE_OWNER,
       model: REPLICATE_IMAGE_MODEL,
-      versionPinned: false, // Flux works via model here
+      versionPinned: false, // Flux called by model endpoint
       approxCostUsd: 0.04,
     },
     video: {
@@ -162,7 +175,7 @@ app.get("/me", (_req, res) =>
   })
 );
 
-// ---------- IMAGE MAGIC (FLUX) ----------
+// ---------- IMAGE MAGIC (FLUX via MODEL endpoint) ----------
 app.post("/magic", upload.single("image"), async (req, res) => {
   try {
     if (!mustHaveToken(res)) return;
@@ -174,19 +187,15 @@ app.post("/magic", upload.single("image"), async (req, res) => {
     const dataUri = bufferToDataUri(file.buffer, file.mimetype);
 
     const input = {
-      [IMG_PROMPT_KEY]: fluxPrompt(styleId),
-      [IMG_IMAGE_PROMPT_KEY]: dataUri,
+      prompt: fluxPrompt(styleId),
+      image_prompt: dataUri,
       aspect_ratio: IMAGE_ASPECT_RATIO,
       output_format: IMAGE_OUTPUT_FORMAT,
       safety_tolerance: IMAGE_SAFETY_TOLERANCE,
       prompt_upsampling: IMAGE_PROMPT_UPSAMPLING,
     };
 
-    // IMPORTANT: for Flux we send ONLY {model,input}. NO "version" field at all.
-    const p = await replicateCreatePrediction({
-      model: `${REPLICATE_IMAGE_OWNER}/${REPLICATE_IMAGE_MODEL}`,
-      input,
-    });
+    const p = await replicateCreateByModel(REPLICATE_IMAGE_OWNER, REPLICATE_IMAGE_MODEL, input);
 
     console.log("[DM-2026] /magic id", p.id);
     res.status(200).json({ ok: true, id: p.id });
@@ -217,7 +226,7 @@ app.get("/magic/status", async (req, res) => {
   }
 });
 
-// ---------- VIDEO MAGIC (WAN) ----------
+// ---------- VIDEO MAGIC ----------
 app.post("/video/start", upload.single("image"), async (req, res) => {
   try {
     if (!mustHaveToken(res)) return;
@@ -241,12 +250,9 @@ app.post("/video/start", upload.single("image"), async (req, res) => {
       interpolate: VIDEO_INTERPOLATE,
     };
 
-    // For video: if version is set -> use version; else -> use model.
-    const body = REPLICATE_VIDEO_VERSION
-      ? { version: REPLICATE_VIDEO_VERSION, input }
-      : { model: `${REPLICATE_VIDEO_OWNER}/${REPLICATE_VIDEO_MODEL}`, input };
-
-    const p = await replicateCreatePrediction(body);
+    const p = REPLICATE_VIDEO_VERSION
+      ? await replicateCreateByVersion(REPLICATE_VIDEO_VERSION, input)
+      : await replicateCreateByModel(REPLICATE_VIDEO_OWNER, REPLICATE_VIDEO_MODEL, input);
 
     console.log("[DM-2026] /video/start id", p.id);
     res.status(200).json({ ok: true, id: p.id });
