@@ -1,10 +1,10 @@
-// DM-2026 backend (Replicate-only) — Node 20 + Express
+// DM-2026 backend (Replicate-only) — Express
 // Endpoints (DO NOT BREAK):
+// GET  /, /health, /me
 // POST /magic (multipart: image + styleId)
 // GET  /magic/status?id=...
-// POST /video/start
+// POST /video/start (multipart: image + prompt?)
 // GET  /video/status?id=...
-// GET  /, /health, /me
 
 import express from "express";
 import cors from "cors";
@@ -49,6 +49,18 @@ const upload = multer({
   limits: { fileSize: 20 * 1024 * 1024 },
 });
 
+// Accept BOTH "image" and "file" field names (на всякий случай)
+const uploadEither = upload.fields([
+  { name: "image", maxCount: 1 },
+  { name: "file", maxCount: 1 },
+]);
+
+function pickFile(req) {
+  const a = req.files?.image?.[0];
+  const b = req.files?.file?.[0];
+  return a || b || null;
+}
+
 // ---------- Helpers ----------
 function mustHaveToken(res) {
   if (!REPLICATE_API_TOKEN) {
@@ -81,16 +93,9 @@ function fluxPrompt(styleId) {
   return `${base} ${extra}`.trim();
 }
 
-async function ensureFetch() {
-  // Node 18+ has global fetch. If not, fallback to node-fetch dynamically.
-  if (typeof fetch === "function") return fetch;
-  const mod = await import("node-fetch");
-  return mod.default;
-}
-
+// Replicate calls
 async function replicateCreateByVersion(version, input) {
-  const f = await ensureFetch();
-  const r = await f("https://api.replicate.com/v1/predictions", {
+  const r = await fetch("https://api.replicate.com/v1/predictions", {
     method: "POST",
     headers: {
       Authorization: `Token ${REPLICATE_API_TOKEN}`,
@@ -104,9 +109,8 @@ async function replicateCreateByVersion(version, input) {
 }
 
 async function replicateCreateByModel(owner, model, input) {
-  const f = await ensureFetch();
   const url = `https://api.replicate.com/v1/models/${encodeURIComponent(owner)}/${encodeURIComponent(model)}/predictions`;
-  const r = await f(url, {
+  const r = await fetch(url, {
     method: "POST",
     headers: {
       Authorization: `Token ${REPLICATE_API_TOKEN}`,
@@ -120,8 +124,7 @@ async function replicateCreateByModel(owner, model, input) {
 }
 
 async function replicateGetPrediction(id) {
-  const f = await ensureFetch();
-  const r = await f(`https://api.replicate.com/v1/predictions/${encodeURIComponent(id)}`, {
+  const r = await fetch(`https://api.replicate.com/v1/predictions/${encodeURIComponent(id)}`, {
     headers: { Authorization: `Token ${REPLICATE_API_TOKEN}` },
   });
   const json = await r.json().catch(() => ({}));
@@ -158,11 +161,6 @@ function pickBestImageUrl(output) {
   return preferred || urls[0] || null;
 }
 
-// Grab file from either "image" or "file"
-function getUploadedFile(req) {
-  return req.file || null; // when using single()
-}
-
 // ---------- Routes ----------
 app.get("/", (_req, res) => res.status(200).send("DM-2026 backend: ok"));
 app.get("/health", (_req, res) => res.status(200).json({ ok: true }));
@@ -184,25 +182,15 @@ app.get("/me", (_req, res) =>
   })
 );
 
-// IMPORTANT: accept BOTH field names to avoid mismatch
-const uploadEither = upload.fields([
-  { name: "image", maxCount: 1 },
-  { name: "file", maxCount: 1 },
-]);
-
-function pickFileFromFields(req) {
-  const a = req.files?.image?.[0];
-  const b = req.files?.file?.[0];
-  return a || b || null;
-}
-
 // ---------- IMAGE MAGIC ----------
 app.post("/magic", uploadEither, async (req, res) => {
   try {
     if (!mustHaveToken(res)) return;
 
-    const file = pickFileFromFields(req);
-    if (!file?.buffer?.length) return res.status(400).json({ ok: false, error: "Missing image (field name must be 'image')" });
+    const file = pickFile(req);
+    if (!file?.buffer?.length) {
+      return res.status(400).json({ ok: false, error: "Missing image (multipart field must be 'image')" });
+    }
 
     const styleId = (req.body?.styleId || "").toString().trim();
     const dataUri = bufferToDataUri(file.buffer, file.mimetype);
@@ -252,8 +240,10 @@ app.post("/video/start", uploadEither, async (req, res) => {
   try {
     if (!mustHaveToken(res)) return;
 
-    const file = pickFileFromFields(req);
-    if (!file?.buffer?.length) return res.status(400).json({ ok: false, error: "Missing image (field name must be 'image')" });
+    const file = pickFile(req);
+    if (!file?.buffer?.length) {
+      return res.status(400).json({ ok: false, error: "Missing image (multipart field must be 'image')" });
+    }
 
     const prompt =
       (req.body?.prompt || "").toString().trim() ||
@@ -301,12 +291,6 @@ app.get("/video/status", async (req, res) => {
   } catch (e) {
     res.status(500).json({ ok: false, error: String(e?.message || e) });
   }
-});
-
-// FINAL: always JSON on unexpected errors
-app.use((err, _req, res, _next) => {
-  console.error("UNHANDLED ERROR:", err);
-  res.status(500).json({ ok: false, error: "Internal Server Error" });
 });
 
 app.listen(PORT, "0.0.0.0", () => console.log(`✅ DM-2026 backend listening on http://0.0.0.0:${PORT}`));
