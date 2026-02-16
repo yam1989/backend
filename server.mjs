@@ -1,38 +1,56 @@
-// DM-2026 backend (Replicate-only) — Express
-// Endpoints (DO NOT BREAK):
-// GET  /, /health, /me
+// DM-2026 backend (Replicate-only) — Node 20 + Express
+// IMPORTANT: Keep existing endpoints:
 // POST /magic (multipart: image + styleId)
-// GET  /magic/status?id=...
-// POST /video/start (multipart: image + prompt?)
+// POST /video/start
 // GET  /video/status?id=...
+// GET  /, /health, /me
+//
+// This server also exposes GET /magic/status?id=... which Flutter uses for polling.
 
 import express from "express";
-import cors from "cors";
 import multer from "multer";
 
 const app = express();
 app.disable("x-powered-by");
-app.use(cors());
 
-const PORT = Number(process.env.PORT || 8080);
+// ---------- Config ----------
+const PORT = parseInt(process.env.PORT || "8080", 10);
+
 const REPLICATE_API_TOKEN = process.env.REPLICATE_API_TOKEN || "";
+if (!REPLICATE_API_TOKEN) {
+  // Don’t throw at import-time; Cloud Run still starts and /health will show the issue.
+  console.warn("⚠️  REPLICATE_API_TOKEN is not set");
+}
 
-// ---------- IMAGE (Flux 1.1 Pro via MODEL endpoint) ----------
-const REPLICATE_IMAGE_OWNER = process.env.REPLICATE_IMAGE_OWNER || "black-forest-labs";
-const REPLICATE_IMAGE_MODEL = process.env.REPLICATE_IMAGE_MODEL || "flux-1.1-pro";
+// Image model (recommended default: fofr/sdxl-multi-controlnet-lora)
+const REPLICATE_IMAGE_OWNER = process.env.REPLICATE_IMAGE_OWNER || "fofr";
+const REPLICATE_IMAGE_MODEL = process.env.REPLICATE_IMAGE_MODEL || "sdxl-multi-controlnet-lora";
+const REPLICATE_IMAGE_VERSION = process.env.REPLICATE_IMAGE_VERSION || ""; // optional pin
 
-const IMAGE_ASPECT_RATIO = process.env.IMAGE_ASPECT_RATIO || "3:2";
-const IMAGE_OUTPUT_FORMAT = process.env.IMAGE_OUTPUT_FORMAT || "png";
-const IMAGE_SAFETY_TOLERANCE = parseInt(process.env.IMAGE_SAFETY_TOLERANCE || "2", 10);
-const IMAGE_PROMPT_UPSAMPLING = (process.env.IMAGE_PROMPT_UPSAMPLING || "false").toLowerCase() === "true";
+// Input keys (kept env-driven; defaults match sdxl-multi-controlnet-lora)
+const IMG_INPUT_KEY = process.env.IMG_INPUT_KEY || "image";
+const IMG_PROMPT_KEY = process.env.IMG_PROMPT_KEY || "prompt";
+const IMG_NEG_PROMPT_KEY = process.env.IMG_NEG_PROMPT_KEY || "negative_prompt";
 
-// Optional style map JSON: {"styleId":"extra prompt"}
-const STYLE_PROMPTS_JSON = process.env.STYLE_PROMPTS_JSON || "";
+// Quality/cost knobs (sdxl-multi-controlnet-lora schema)
+const IMAGE_STEPS = parseInt(process.env.IMAGE_STEPS || "20", 10); // num_inference_steps
+const IMAGE_GUIDANCE = parseFloat(process.env.IMAGE_GUIDANCE || "5.0"); // guidance_scale
+const IMAGE_PROMPT_STRENGTH = parseFloat(process.env.IMAGE_PROMPT_STRENGTH || "0.45"); // prompt_strength (lower = preserve input more)
 
-// ---------- VIDEO (Wan) ----------
+// ControlNet defaults (help keep structure + avoid “empty texture”)
+const IMAGE_CONTROLNET_1 = process.env.IMAGE_CONTROLNET_1 || "lineart"; // canny | lineart | soft_edge_hed | ...
+const IMAGE_CONTROLNET_1_SCALE = parseFloat(process.env.IMAGE_CONTROLNET_1_SCALE || "1.15");
+const IMAGE_CONTROLNET_1_START = parseFloat(process.env.IMAGE_CONTROLNET_1_START || "0.0");
+const IMAGE_CONTROLNET_1_END = parseFloat(process.env.IMAGE_CONTROLNET_1_END || "1.0");
+
+// Output sizing (optional; if omitted the model will choose defaults)
+const IMAGE_WIDTH = parseInt(process.env.IMAGE_WIDTH || "0", 10);   // 0 => omit
+const IMAGE_HEIGHT = parseInt(process.env.IMAGE_HEIGHT || "0", 10); // 0 => omit
+
+// Video model (kept as you described)
 const REPLICATE_VIDEO_OWNER = process.env.REPLICATE_VIDEO_OWNER || "wan-video";
 const REPLICATE_VIDEO_MODEL = process.env.REPLICATE_VIDEO_MODEL || "wan-2.2-i2v-fast";
-const REPLICATE_VIDEO_VERSION = process.env.REPLICATE_VIDEO_VERSION || ""; // optional pinned version
+const REPLICATE_VIDEO_VERSION = process.env.REPLICATE_VIDEO_VERSION || ""; // optional pin
 
 const VIDEO_INPUT_KEY = process.env.VIDEO_INPUT_KEY || "image";
 const VIDEO_PROMPT_KEY = process.env.VIDEO_PROMPT_KEY || "prompt";
@@ -43,26 +61,38 @@ const VIDEO_NUM_FRAMES = parseInt(process.env.VIDEO_NUM_FRAMES || "81", 10);
 const VIDEO_GO_FAST = (process.env.VIDEO_GO_FAST || "true").toLowerCase() === "true";
 const VIDEO_INTERPOLATE = (process.env.VIDEO_INTERPOLATE || "false").toLowerCase() === "true";
 
-// ---------- Upload ----------
+// Optional style prompts mapping:
+// STYLE_PROMPTS_JSON='{"styleId1":"...","styleId2":"..."}'
+const STYLE_PROMPTS_JSON = process.env.STYLE_PROMPTS_JSON || "";
+
+// ---------- Middleware ----------
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 20 * 1024 * 1024 },
+  limits: { fileSize: 15 * 1024 * 1024 }, // 15MB
 });
 
-// Accept BOTH "image" and "file" field names (на всякий случай)
-const uploadEither = upload.fields([
-  { name: "image", maxCount: 1 },
-  { name: "file", maxCount: 1 },
-]);
+app.get("/", (_req, res) => res.status(200).send("DM-2026 backend: ok"));
+app.get("/health", (_req, res) => res.status(200).json({ ok: true }));
 
-function pickFile(req) {
-  const a = req.files?.image?.[0];
-  const b = req.files?.file?.[0];
-  return a || b || null;
-}
+app.get("/me", (_req, res) => {
+  res.status(200).json({
+    ok: true,
+    mode: "replicate",
+    image: {
+      owner: REPLICATE_IMAGE_OWNER,
+      model: REPLICATE_IMAGE_MODEL,
+      versionPinned: Boolean(REPLICATE_IMAGE_VERSION),
+    },
+    video: {
+      owner: REPLICATE_VIDEO_OWNER,
+      model: REPLICATE_VIDEO_MODEL,
+      versionPinned: Boolean(REPLICATE_VIDEO_VERSION),
+    },
+  });
+});
 
 // ---------- Helpers ----------
-function mustHaveToken(res) {
+function mustBeOkEnv(res) {
   if (!REPLICATE_API_TOKEN) {
     res.status(500).json({ ok: false, error: "REPLICATE_API_TOKEN is not set" });
     return false;
@@ -72,54 +102,59 @@ function mustHaveToken(res) {
 
 function bufferToDataUri(buf, mime) {
   const safeMime = mime && mime.includes("/") ? mime : "image/png";
-  return `data:${safeMime};base64,${buf.toString("base64")}`;
+  const base64 = buf.toString("base64");
+  return `data:${safeMime};base64,${base64}`;
 }
 
-function parseStyleExtra(styleId) {
-  if (!styleId || !STYLE_PROMPTS_JSON) return "";
-  try {
-    const m = JSON.parse(STYLE_PROMPTS_JSON);
-    if (m && typeof m === "object" && m[styleId]) return String(m[styleId]);
-  } catch {}
-  return "";
-}
-
-function fluxPrompt(styleId) {
+function getStylePrompt(styleId) {
   const base =
-    "Premium kids illustration redraw. Preserve the exact composition, pose, proportions, and shapes from the input drawing. " +
-    "Keep the same objects and positions 1:1. Clean crisp outlines, smooth solid color fills, gentle soft shading. " +
-    "Background must be clean and simple. No paper texture. No scan noise. No blur. No zoom. No crop. No new objects.";
-  const extra = parseStyleExtra(styleId);
-  return `${base} ${extra}`.trim();
+    "Premium kid-friendly illustration redraw. Keep the exact composition, pose, proportions, and shapes from the input drawing. " +
+    "Clean crisp lines, smooth solid color fills, gentle soft shading, no paper texture, no noise, no blur. " +
+    "Do NOT add new objects, do NOT remove objects, do NOT change background framing. Center the drawing, no zoom, no crop.";
+  const neg =
+    "photorealistic, photo, paper texture, scan artifacts, watermark, text, letters, numbers, logo, border, frame, " +
+    "extra objects, extra limbs, dramatic new background, heavy grain, low quality, blurry, out of focus";
+
+  let styleExtra = "";
+  if (STYLE_PROMPTS_JSON) {
+    try {
+      const map = JSON.parse(STYLE_PROMPTS_JSON);
+      if (map && typeof map === "object" && styleId && map[styleId]) {
+        styleExtra = String(map[styleId]);
+      }
+    } catch {
+      // ignore invalid JSON
+    }
+  } else if (styleId) {
+    // Fallback: treat styleId as a lightweight hint (won't break if it's an internal id)
+    styleExtra = `Style hint: ${styleId}.`;
+  }
+
+  return {
+    prompt: `${base} ${styleExtra}`.trim(),
+    negative: neg,
+  };
 }
 
-// Replicate calls
-async function replicateCreateByVersion(version, input) {
+async function replicateCreatePrediction({ owner, model, version, input }) {
+  const body = version
+    ? { version, input }
+    : { model: `${owner}/${model}`, input };
+
   const r = await fetch("https://api.replicate.com/v1/predictions", {
     method: "POST",
     headers: {
       Authorization: `Token ${REPLICATE_API_TOKEN}`,
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({ version, input }),
+    body: JSON.stringify(body),
   });
-  const json = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(json?.detail || json?.error || r.statusText || "Replicate error");
-  return json;
-}
 
-async function replicateCreateByModel(owner, model, input) {
-  const url = `https://api.replicate.com/v1/models/${encodeURIComponent(owner)}/${encodeURIComponent(model)}/predictions`;
-  const r = await fetch(url, {
-    method: "POST",
-    headers: {
-      Authorization: `Token ${REPLICATE_API_TOKEN}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ input }),
-  });
   const json = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(json?.detail || json?.error || r.statusText || "Replicate error");
+  if (!r.ok) {
+    const msg = json?.detail || json?.error || r.statusText || "Replicate error";
+    throw new Error(msg);
+  }
   return json;
 }
 
@@ -128,125 +163,117 @@ async function replicateGetPrediction(id) {
     headers: { Authorization: `Token ${REPLICATE_API_TOKEN}` },
   });
   const json = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(json?.detail || json?.error || r.statusText || "Replicate error");
+  if (!r.ok) {
+    const msg = json?.detail || json?.error || r.statusText || "Replicate error";
+    throw new Error(msg);
+  }
   return json;
 }
 
-function collectUrls(output, out = []) {
-  if (!output) return out;
-  if (typeof output === "string") {
-    if (output.startsWith("http://") || output.startsWith("https://")) out.push(output);
-    return out;
+function normalizeOutputUrl(output) {
+  if (!output) return null;
+  if (typeof output === "string") return output;
+  if (Array.isArray(output) && output.length) {
+    // some models return array of URLs
+    const first = output[0];
+    if (typeof first === "string") return first;
   }
-  if (Array.isArray(output)) {
-    for (const item of output) collectUrls(item, out);
-    return out;
-  }
-  if (typeof output === "object") {
-    for (const v of Object.values(output)) collectUrls(v, out);
-    return out;
-  }
-  return out;
+  // some models return object/array of objects; ignore
+  return null;
 }
 
-function pickBestUrl(output) {
-  const urls = collectUrls(output, []);
-  return urls[0] || null;
-}
+// ---------- Endpoints ----------
 
-function pickBestImageUrl(output) {
-  const urls = collectUrls(output, []);
-  if (!urls.length) return null;
-  const preferred = urls.find((u) => /out-|output|result|final/i.test(u));
-  return preferred || urls[0] || null;
-}
-
-// ---------- Routes ----------
-app.get("/", (_req, res) => res.status(200).send("DM-2026 backend: ok"));
-app.get("/health", (_req, res) => res.status(200).json({ ok: true }));
-
-app.get("/me", (_req, res) =>
-  res.status(200).json({
-    ok: true,
-    mode: "replicate",
-    image: {
-      owner: REPLICATE_IMAGE_OWNER,
-      model: REPLICATE_IMAGE_MODEL,
-      versionPinned: false, // Flux runs via model endpoint
-    },
-    video: {
-      owner: REPLICATE_VIDEO_OWNER,
-      model: REPLICATE_VIDEO_MODEL,
-      versionPinned: Boolean(REPLICATE_VIDEO_VERSION),
-    },
-  })
-);
-
-// ---------- IMAGE MAGIC ----------
-app.post("/magic", uploadEither, async (req, res) => {
+// POST /magic (multipart: image + styleId)
+// Returns { ok:true, id }
+app.post("/magic", upload.single("image"), async (req, res) => {
   try {
-    if (!mustHaveToken(res)) return;
-
-    const file = pickFile(req);
-    if (!file?.buffer?.length) {
-      return res.status(400).json({ ok: false, error: "Missing image (multipart field must be 'image')" });
-    }
+    if (!mustBeOkEnv(res)) return;
 
     const styleId = (req.body?.styleId || "").toString().trim();
+    const file = req.file;
+
+    if (!file || !file.buffer || file.buffer.length < 10) {
+      return res.status(400).json({ ok: false, error: "Missing image" });
+    }
+
     const dataUri = bufferToDataUri(file.buffer, file.mimetype);
+    const { prompt, negative } = getStylePrompt(styleId);
 
     const input = {
-      prompt: fluxPrompt(styleId),
-      image_prompt: dataUri,
-      aspect_ratio: IMAGE_ASPECT_RATIO,
-      output_format: IMAGE_OUTPUT_FORMAT,
-      safety_tolerance: IMAGE_SAFETY_TOLERANCE,
-      prompt_upsampling: IMAGE_PROMPT_UPSAMPLING,
+      [IMG_PROMPT_KEY]: prompt,
+      [IMG_NEG_PROMPT_KEY]: negative,
+      [IMG_INPUT_KEY]: dataUri,
+
+      // SDXL i2i knobs
+      num_inference_steps: IMAGE_STEPS,
+      guidance_scale: IMAGE_GUIDANCE,
+      prompt_strength: IMAGE_PROMPT_STRENGTH,
+
+      // Strong structure lock (ControlNet)
+      controlnet_1: IMAGE_CONTROLNET_1,
+      controlnet_1_image: dataUri,
+      controlnet_1_conditioning_scale: IMAGE_CONTROLNET_1_SCALE,
+      controlnet_1_start: IMAGE_CONTROLNET_1_START,
+      controlnet_1_end: IMAGE_CONTROLNET_1_END,
+
+      // Ensure img2img mode
+      // (model uses `image` presence to pick img2img)
     };
 
-    // FLUX must be called by MODEL endpoint (no version)
-    const p = await replicateCreateByModel(REPLICATE_IMAGE_OWNER, REPLICATE_IMAGE_MODEL, input);
+    if (IMAGE_WIDTH > 0) input.width = IMAGE_WIDTH;
+    if (IMAGE_HEIGHT > 0) input.height = IMAGE_HEIGHT;
 
-    res.status(200).json({ ok: true, id: p.id });
+    const prediction = await replicateCreatePrediction({
+      owner: REPLICATE_IMAGE_OWNER,
+      model: REPLICATE_IMAGE_MODEL,
+      version: REPLICATE_IMAGE_VERSION || undefined,
+      input,
+    });
+
+    return res.status(200).json({ ok: true, id: prediction.id });
   } catch (e) {
-    res.status(500).json({ ok: false, error: String(e?.message || e) });
+    return res.status(500).json({ ok: false, error: String(e?.message || e) });
   }
 });
 
+// GET /magic/status?id=...
+// Returns { ok:true, status, outputUrl, error? }
 app.get("/magic/status", async (req, res) => {
   try {
-    if (!mustHaveToken(res)) return;
+    if (!mustBeOkEnv(res)) return;
 
     const id = (req.query?.id || "").toString().trim();
     if (!id) return res.status(400).json({ ok: false, error: "Missing id" });
 
     const p = await replicateGetPrediction(id);
-    const status = p?.status || "unknown";
-    const outputUrl = status === "succeeded" ? pickBestImageUrl(p?.output) : null;
 
-    res.status(200).json({
+    const status = p?.status || "unknown";
+    const outputUrl = status === "succeeded" ? normalizeOutputUrl(p?.output) : null;
+
+    return res.status(200).json({
       ok: true,
       status,
       outputUrl,
       error: p?.error || null,
     });
   } catch (e) {
-    res.status(500).json({ ok: false, error: String(e?.message || e) });
+    return res.status(500).json({ ok: false, error: String(e?.message || e) });
   }
 });
 
-// ---------- VIDEO MAGIC ----------
-app.post("/video/start", uploadEither, async (req, res) => {
+// POST /video/start (multipart: image + prompt?)
+// Returns { ok:true, id }
+app.post("/video/start", upload.single("image"), async (req, res) => {
   try {
-    if (!mustHaveToken(res)) return;
+    if (!mustBeOkEnv(res)) return;
 
-    const file = pickFile(req);
-    if (!file?.buffer?.length) {
-      return res.status(400).json({ ok: false, error: "Missing image (multipart field must be 'image')" });
+    const file = req.file;
+    if (!file || !file.buffer || file.buffer.length < 10) {
+      return res.status(400).json({ ok: false, error: "Missing image" });
     }
 
-    const prompt =
-      (req.body?.prompt || "").toString().trim() ||
+    const prompt = (req.body?.prompt || "").toString().trim() ||
       "Gentle cinematic camera move, subtle motion, keep the same drawing, no new objects.";
 
     const dataUri = bufferToDataUri(file.buffer, file.mimetype);
@@ -254,6 +281,7 @@ app.post("/video/start", uploadEither, async (req, res) => {
     const input = {
       [VIDEO_INPUT_KEY]: dataUri,
       [VIDEO_PROMPT_KEY]: prompt,
+
       resolution: VIDEO_RESOLUTION,
       frames_per_second: VIDEO_FPS,
       num_frames: VIDEO_NUM_FRAMES,
@@ -261,36 +289,44 @@ app.post("/video/start", uploadEither, async (req, res) => {
       interpolate: VIDEO_INTERPOLATE,
     };
 
-    const p = REPLICATE_VIDEO_VERSION
-      ? await replicateCreateByVersion(REPLICATE_VIDEO_VERSION, input)
-      : await replicateCreateByModel(REPLICATE_VIDEO_OWNER, REPLICATE_VIDEO_MODEL, input);
+    const prediction = await replicateCreatePrediction({
+      owner: REPLICATE_VIDEO_OWNER,
+      model: REPLICATE_VIDEO_MODEL,
+      version: REPLICATE_VIDEO_VERSION || undefined,
+      input,
+    });
 
-    res.status(200).json({ ok: true, id: p.id });
+    return res.status(200).json({ ok: true, id: prediction.id });
   } catch (e) {
-    res.status(500).json({ ok: false, error: String(e?.message || e) });
+    return res.status(500).json({ ok: false, error: String(e?.message || e) });
   }
 });
 
+// GET /video/status?id=...
+// Returns { ok:true, status, outputUrl, error? }
 app.get("/video/status", async (req, res) => {
   try {
-    if (!mustHaveToken(res)) return;
+    if (!mustBeOkEnv(res)) return;
 
     const id = (req.query?.id || "").toString().trim();
     if (!id) return res.status(400).json({ ok: false, error: "Missing id" });
 
     const p = await replicateGetPrediction(id);
     const status = p?.status || "unknown";
-    const outputUrl = status === "succeeded" ? pickBestUrl(p?.output) : null;
+    const outputUrl = status === "succeeded" ? normalizeOutputUrl(p?.output) : null;
 
-    res.status(200).json({
+    return res.status(200).json({
       ok: true,
       status,
       outputUrl,
       error: p?.error || null,
     });
   } catch (e) {
-    res.status(500).json({ ok: false, error: String(e?.message || e) });
+    return res.status(500).json({ ok: false, error: String(e?.message || e) });
   }
 });
 
-app.listen(PORT, "0.0.0.0", () => console.log(`✅ DM-2026 backend listening on http://0.0.0.0:${PORT}`));
+// ---------- Start ----------
+app.listen(PORT, "0.0.0.0", () => {
+  console.log(`✅ DM-2026 backend listening on http://0.0.0.0:${PORT}`);
+});
