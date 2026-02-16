@@ -1,6 +1,7 @@
-// DM-2026 backend (OpenAI Image i2i via images.edit + Replicate Video) — Node 20 + Express
-// FIX: outputUrl MUST be absolute (Flutter downloads it). Returning "/magic/result" breaks with "No host specified in URI".
-// Also: converts uploaded image to PNG for dall-e-2 edits, requests b64_json and supports URL fallback.
+// DM-2026 backend (OpenAI Image i2i via images.edit + FULL MASK + Replicate Video)
+// Fix: If OpenAI returns the same image, it's usually because edits without a mask may preserve pixels.
+// We generate a full white PNG mask (same size) to force a full redraw while keeping structure via prompt.
+// Also: convert input to PNG, request b64_json, URL fallback, and return ABSOLUTE outputUrl.
 
 import express from "express";
 import multer from "multer";
@@ -81,18 +82,29 @@ function normalizeOutputUrl(output) {
 function getStylePrompt(styleId) {
   const base =
     "Redraw this child's drawing as a premium clean illustration for a kids iOS app. " +
-    "CRITICAL: Preserve the original drawing structure 1:1 (same composition, pose, proportions, shapes, positions). " +
-    "Do NOT add objects. Do NOT remove objects. Do NOT zoom/crop. Do NOT add borders/white margins. " +
-    "Make it look expensive: crisp clean lines, smooth fills, gentle shading, subtle highlights. No paper texture, no noise.";
+    "CRITICAL: Preserve the original drawing structure 1:1 (same composition, framing, pose, proportions, shapes, relative positions). " +
+    "Do NOT add new objects. Do NOT remove objects. Do NOT zoom/crop. Do NOT add borders/white margins. " +
+    "This must be a FULL REDRAW (not a photo enhancement). Re-ink all lines cleanly and recolor with smooth fills and gentle shading. " +
+    "Make it look expensive: crisp clean lines, smooth fills, subtle highlights. No paper texture, no noise.";
+
+  const neg =
+    "photo, photorealistic, scan, paper texture, grain, blur, watermark, text, letters, numbers, logo, border, frame, " +
+    "extra objects, extra limbs, wrong pose, different composition, different framing, cropped, zoomed, low quality";
+
   let extra = "";
   if (STYLE_PROMPTS_JSON) {
-    try { const map = JSON.parse(STYLE_PROMPTS_JSON); if (map && styleId && map[styleId]) extra = String(map[styleId]); } catch {}
+    try {
+      const map = JSON.parse(STYLE_PROMPTS_JSON);
+      if (map && typeof map === "object" && styleId && map[styleId]) extra = String(map[styleId]);
+    } catch {}
   } else if (styleId) extra = `Style hint: ${styleId}.`;
-  return `${base} ${extra}`.trim();
+
+  return `${base} ${extra}
+
+Avoid: ${neg}`.trim();
 }
 
 function getBaseUrl(req) {
-  // Cloud Run is behind proxy; trust x-forwarded-proto if present
   const proto = (req.headers["x-forwarded-proto"] || req.protocol || "https").toString().split(",")[0].trim();
   const host = (req.headers["x-forwarded-host"] || req.get("host") || "").toString().split(",")[0].trim();
   return `${proto}://${host}`;
@@ -133,10 +145,20 @@ async function ensurePngBuffer(inputBuf) {
   return await _sharp(inputBuf).png().toBuffer();
 }
 
-async function bufferToOpenAIFileAsPng(file) {
+async function makeFullWhiteMaskPng(pngBuf) {
+  await loadSharp();
+  const meta = await _sharp(pngBuf).metadata();
+  const w = meta.width || 1024;
+  const h = meta.height || 1024;
+  // full white = replace all pixels; alpha 1
+  return await _sharp({
+    create: { width: w, height: h, channels: 4, background: { r: 255, g: 255, b: 255, alpha: 1 } }
+  }).png().toBuffer();
+}
+
+async function bufferToOpenAIFile(buf, filename, mime) {
   await loadOpenAI();
-  const pngBuf = await ensurePngBuffer(file.buffer);
-  return await _toFile(pngBuf, "image.png", { type: "image/png" });
+  return await _toFile(buf, filename, { type: mime });
 }
 
 async function fetchBytesFromUrl(url) {
@@ -152,11 +174,17 @@ async function runOpenAIImageEdit({ jobId, file, styleId }) {
     const client = await getOpenAIClient();
     const prompt = getStylePrompt(styleId);
 
-    const openaiFile = await bufferToOpenAIFileAsPng(file);
+    // Convert input to PNG and build full mask PNG
+    const pngBuf = await ensurePngBuffer(file.buffer);
+    const maskBuf = await makeFullWhiteMaskPng(pngBuf);
+
+    const openaiImage = await bufferToOpenAIFile(pngBuf, "image.png", "image/png");
+    const openaiMask = await bufferToOpenAIFile(maskBuf, "mask.png", "image/png");
 
     const result = await client.images.edit({
       model: OPENAI_IMAGE_MODEL,
-      image: openaiFile,
+      image: openaiImage,
+      mask: openaiMask,
       prompt,
       size: OPENAI_IMAGE_SIZE,
       response_format: "b64_json",
@@ -165,11 +193,8 @@ async function runOpenAIImageEdit({ jobId, file, styleId }) {
     const item = result?.data?.[0];
     let bytes = null;
 
-    if (item?.b64_json) {
-      bytes = Buffer.from(item.b64_json, "base64");
-    } else if (item?.url) {
-      bytes = await fetchBytesFromUrl(item.url);
-    }
+    if (item?.b64_json) bytes = Buffer.from(item.b64_json, "base64");
+    else if (item?.url) bytes = await fetchBytesFromUrl(item.url);
 
     if (!bytes || !bytes.length) throw new Error("OpenAI returned no image data (missing b64_json and url)");
     if (bytes.length > MAGIC_MAX_BYTES) throw new Error(`Image too large (${bytes.length} bytes)`);
@@ -243,7 +268,6 @@ app.get("/magic/status", (req,res)=>{
 
   const status = job.status || "unknown";
   const outputUrl = status === "succeeded" ? `${getBaseUrl(req)}/magic/result?id=${encodeURIComponent(id)}` : null;
-
   return res.status(200).json({ ok:true, status, outputUrl, error: job.error || null });
 });
 
