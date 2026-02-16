@@ -292,8 +292,33 @@ app.post("/video/start", upload.single("image"), async (req,res)=>{
     const file = req.file;
     if (!file?.buffer || file.buffer.length < 10) return res.status(400).json({ ok:false, error:"Missing image" });
 
-    const prompt = (req.body?.prompt || "").toString().trim() ||
-      "Gentle cinematic animation, preserve original drawing 1:1, no new objects, no morphing, no zoom/crop.";
+    const prompt = `
+This is a child’s hand-drawn picture.
+
+Animate ONLY the objects that already exist in the drawing.
+Do NOT add any new objects.
+Do NOT remove anything.
+Do NOT change composition, framing, proportions, or camera angle.
+No zoom. No camera movement.
+
+Preserve the original structure 1:1.
+Keep all shapes and positions exactly the same.
+
+Bring the drawing to life in a premium Pixar-style animation:
+
+• Add soft dimensional lighting and gentle depth
+• Subtle shadows consistent with drawn light sources
+• Smooth, high-quality motion with natural easing
+• Each existing object moves logically and expressively
+• Water flows smoothly
+• Clouds drift softly
+• Sun rays shimmer gently
+• Flags or sails react to invisible wind
+• Small ambient motion everywhere
+
+STRICTLY no new objects or details.
+Loop-friendly. Smooth. Clean.
+`;
 
     const dataUri = bufferToDataUri(file.buffer, file.mimetype);
     const input = {
