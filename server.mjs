@@ -1,7 +1,14 @@
-// DM-2026 backend (OpenAI Image i2i via images.edit + FULL MASK + Replicate Video)
-// Fix: If OpenAI returns the same image, it's usually because edits without a mask may preserve pixels.
-// We generate a full white PNG mask (same size) to force a full redraw while keeping structure via prompt.
-// Also: convert input to PNG, request b64_json, URL fallback, and return ABSOLUTE outputUrl.
+// DM-2026 backend — Cloud Run (Node 20 + Express)
+// Image Mode: OpenAI GPT Image (gpt-image-1) via Images API (client.images.edit)
+// Video Mode: Replicate wan-2.2-i2v-fast (unchanged)
+//
+// Endpoints (DO NOT CHANGE):
+//   GET  /, /health, /me
+//   POST /magic          (multipart: image + styleId) -> { ok:true, id }
+//   GET  /magic/status   -> { ok:true, status, outputUrl, error }
+//   GET  /magic/result   -> image bytes
+//   POST /video/start    (multipart: image + optional prompt) -> { ok:true, id }
+//   GET  /video/status   -> { ok:true, status, outputUrl, error }
 
 import express from "express";
 import multer from "multer";
@@ -13,8 +20,9 @@ const PORT = parseInt(process.env.PORT || "8080", 10);
 
 // ---------- ENV ----------
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || "";
-const OPENAI_IMAGE_MODEL = process.env.OPENAI_IMAGE_MODEL || "dall-e-2";
+const OPENAI_IMAGE_MODEL = process.env.OPENAI_IMAGE_MODEL || "gpt-image-1";
 const OPENAI_IMAGE_SIZE = process.env.OPENAI_IMAGE_SIZE || "1024x1024";
+const OPENAI_OUTPUT_FORMAT = process.env.OPENAI_OUTPUT_FORMAT || "png"; // png|jpeg|webp (GPT Image models)
 
 const REPLICATE_API_TOKEN = process.env.REPLICATE_API_TOKEN || "";
 const REPLICATE_VIDEO_OWNER = process.env.REPLICATE_VIDEO_OWNER || "wan-video";
@@ -33,12 +41,12 @@ const STYLE_PROMPTS_JSON = process.env.STYLE_PROMPTS_JSON || "";
 
 // In-memory async jobs for /magic
 const MAGIC_TTL_MS = parseInt(process.env.MAGIC_TTL_MS || String(60 * 60 * 1000), 10);
-const MAGIC_MAX_BYTES = parseInt(process.env.MAGIC_MAX_BYTES || String(8 * 1024 * 1024), 10);
+const MAGIC_MAX_BYTES = parseInt(process.env.MAGIC_MAX_BYTES || String(10 * 1024 * 1024), 10);
 const magicJobs = new Map();
 
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 20 * 1024 * 1024 },
+  limits: { fileSize: 25 * 1024 * 1024 },
 });
 
 // ---------- Helpers ----------
@@ -61,10 +69,10 @@ function mustBeOkReplicate(res) {
   return true;
 }
 
-function bufferToDataUri(buf, mime) {
-  const safeMime = mime && mime.includes("/") ? mime : "image/png";
-  const base64 = Buffer.from(buf).toString("base64");
-  return `data:${safeMime};base64,${base64}`;
+function getBaseUrl(req) {
+  const proto = (req.headers["x-forwarded-proto"] || req.protocol || "https").toString().split(",")[0].trim();
+  const host = (req.headers["x-forwarded-host"] || req.get("host") || "").toString().split(",")[0].trim();
+  return `${proto}://${host}`;
 }
 
 function normalizeOutputUrl(output) {
@@ -79,17 +87,22 @@ function normalizeOutputUrl(output) {
   return null;
 }
 
+function bufferToDataUri(buf, mime) {
+  const safeMime = mime && mime.includes("/") ? mime : "image/png";
+  const base64 = Buffer.from(buf).toString("base64");
+  return `data:${safeMime};base64,${base64}`;
+}
+
 function getStylePrompt(styleId) {
   const base =
-    "Redraw this child's drawing as a premium clean illustration for a kids iOS app. " +
-    "CRITICAL: Preserve the original drawing structure 1:1 (same composition, framing, pose, proportions, shapes, relative positions). " +
+    "Redraw this child's drawing as a premium, clean illustration for a kids iOS app. " +
+    "CRITICAL: Preserve the original drawing structure 1:1 (same composition, framing, pose, proportions, shapes, and relative positions). " +
     "Do NOT add new objects. Do NOT remove objects. Do NOT zoom/crop. Do NOT add borders/white margins. " +
-    "This must be a FULL REDRAW (not a photo enhancement). Re-ink all lines cleanly and recolor with smooth fills and gentle shading. " +
-    "Make it look expensive: crisp clean lines, smooth fills, subtle highlights. No paper texture, no noise.";
+    "Make it look expensive: crisp clean ink lines, smooth color fills, gentle shading, subtle highlights. " +
+    "No paper texture, no scan artifacts, no grain, no blur.";
 
   const neg =
-    "photo, photorealistic, scan, paper texture, grain, blur, watermark, text, letters, numbers, logo, border, frame, " +
-    "extra objects, extra limbs, wrong pose, different composition, different framing, cropped, zoomed, low quality";
+    "text, letters, numbers, watermark, logo, border, frame, crop, zoom, extra objects, different pose, different composition, photorealistic, paper texture, noise";
 
   let extra = "";
   if (STYLE_PROMPTS_JSON) {
@@ -97,17 +110,13 @@ function getStylePrompt(styleId) {
       const map = JSON.parse(STYLE_PROMPTS_JSON);
       if (map && typeof map === "object" && styleId && map[styleId]) extra = String(map[styleId]);
     } catch {}
-  } else if (styleId) extra = `Style hint: ${styleId}.`;
+  } else if (styleId) {
+    extra = `Style hint: ${styleId}.`;
+  }
 
   return `${base} ${extra}
 
 Avoid: ${neg}`.trim();
-}
-
-function getBaseUrl(req) {
-  const proto = (req.headers["x-forwarded-proto"] || req.protocol || "https").toString().split(",")[0].trim();
-  const host = (req.headers["x-forwarded-host"] || req.get("host") || "").toString().split(",")[0].trim();
-  return `${proto}://${host}`;
 }
 
 // ---------- OpenAI lazy loader (client + toFile) ----------
@@ -135,25 +144,9 @@ async function getOpenAIClient() {
   return new _OpenAI({ apiKey: OPENAI_API_KEY });
 }
 
-function isPng(buf) {
-  return buf && buf.length >= 8 && buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4E && buf[3] === 0x47;
-}
-
-async function ensurePngBuffer(inputBuf) {
-  if (isPng(inputBuf)) return inputBuf;
+async function toPngBuffer(inputBuf) {
   await loadSharp();
   return await _sharp(inputBuf).png().toBuffer();
-}
-
-async function makeFullWhiteMaskPng(pngBuf) {
-  await loadSharp();
-  const meta = await _sharp(pngBuf).metadata();
-  const w = meta.width || 1024;
-  const h = meta.height || 1024;
-  // full white = replace all pixels; alpha 1
-  return await _sharp({
-    create: { width: w, height: h, channels: 4, background: { r: 255, g: 255, b: 255, alpha: 1 } }
-  }).png().toBuffer();
 }
 
 async function bufferToOpenAIFile(buf, filename, mime) {
@@ -168,26 +161,23 @@ async function fetchBytesFromUrl(url) {
   return Buffer.from(arr);
 }
 
-// ---------- OpenAI image pipeline ----------
-async function runOpenAIImageEdit({ jobId, file, styleId }) {
+// ---------- OpenAI image pipeline (gpt-image-1) ----------
+async function runOpenAIImageMagic({ jobId, file, styleId }) {
   try {
     const client = await getOpenAIClient();
     const prompt = getStylePrompt(styleId);
 
-    // Convert input to PNG and build full mask PNG
-    const pngBuf = await ensurePngBuffer(file.buffer);
-    const maskBuf = await makeFullWhiteMaskPng(pngBuf);
+    // gpt-image-1 accepts image(s) as file uploads. We convert to PNG for stability.
+    const pngBuf = await toPngBuffer(file.buffer);
+    const openaiImage = await bufferToOpenAIFile(pngBuf, "input.png", "image/png");
 
-    const openaiImage = await bufferToOpenAIFile(pngBuf, "image.png", "image/png");
-    const openaiMask = await bufferToOpenAIFile(maskBuf, "mask.png", "image/png");
-
+    // NOTE: For GPT Image models, b64_json is returned by default.
     const result = await client.images.edit({
-      model: OPENAI_IMAGE_MODEL,
-      image: openaiImage,
-      mask: openaiMask,
+      model: OPENAI_IMAGE_MODEL,      // gpt-image-1
+      image: openaiImage,             // can also be [openaiImage]
       prompt,
       size: OPENAI_IMAGE_SIZE,
-      response_format: "b64_json",
+      output_format: OPENAI_OUTPUT_FORMAT, // png|jpeg|webp
     });
 
     const item = result?.data?.[0];
@@ -199,13 +189,20 @@ async function runOpenAIImageEdit({ jobId, file, styleId }) {
     if (!bytes || !bytes.length) throw new Error("OpenAI returned no image data (missing b64_json and url)");
     if (bytes.length > MAGIC_MAX_BYTES) throw new Error(`Image too large (${bytes.length} bytes)`);
 
-    magicJobs.set(jobId, { status:"succeeded", mime:"image/png", bytes, error:null, createdAt: now() });
+    // We always serve PNG bytes to Flutter to keep it simple.
+    // If output_format is jpeg/webp, we still return bytes with correct mime below.
+    const mime =
+      OPENAI_OUTPUT_FORMAT === "jpeg" ? "image/jpeg" :
+      OPENAI_OUTPUT_FORMAT === "webp" ? "image/webp" :
+      "image/png";
+
+    magicJobs.set(jobId, { status:"succeeded", mime, bytes, error:null, createdAt: now() });
   } catch (e) {
     magicJobs.set(jobId, { status:"failed", mime:null, bytes:null, error:String(e?.message || e), createdAt: now() });
   }
 }
 
-// ---------- Replicate API ----------
+// ---------- Replicate API (Video) ----------
 async function replicateCreatePrediction({ owner, model, version, input }) {
   const body = version ? { version, input } : { model: `${owner}/${model}`, input };
   const r = await fetch("https://api.replicate.com/v1/predictions", {
@@ -228,20 +225,18 @@ async function replicateGetPrediction(id) {
 
 // ---------- Routes ----------
 app.get("/", (_req,res)=>res.status(200).send("DM-2026 backend: ok"));
-
 app.get("/health", (_req,res)=>res.status(200).json({
   ok:true,
   openaiKey:Boolean(OPENAI_API_KEY),
   replicateKey:Boolean(REPLICATE_API_TOKEN),
 }));
-
 app.get("/me", (_req,res)=>res.status(200).json({
   ok:true,
-  image:{ provider:"openai", model:OPENAI_IMAGE_MODEL, size:OPENAI_IMAGE_SIZE },
+  image:{ provider:"openai", model:OPENAI_IMAGE_MODEL, size:OPENAI_IMAGE_SIZE, output_format: OPENAI_OUTPUT_FORMAT },
   video:{ provider:"replicate", owner:REPLICATE_VIDEO_OWNER, model:REPLICATE_VIDEO_MODEL, versionPinned:Boolean(REPLICATE_VIDEO_VERSION) },
 }));
 
-// POST /magic
+// POST /magic  (multipart: image + styleId) -> { ok:true, id }
 app.post("/magic", upload.single("image"), async (req,res)=>{
   try {
     if (!mustBeOkOpenAI(res)) return;
@@ -251,14 +246,14 @@ app.post("/magic", upload.single("image"), async (req,res)=>{
 
     const id = `m_${crypto.randomUUID()}`;
     magicJobs.set(id, { status:"processing", createdAt: now() });
-    runOpenAIImageEdit({ jobId:id, file, styleId });
+    runOpenAIImageMagic({ jobId:id, file, styleId }); // async
     return res.status(200).json({ ok:true, id });
   } catch (e) {
     return res.status(500).json({ ok:false, error:String(e?.message || e) });
   }
 });
 
-// GET /magic/status
+// GET /magic/status?id=... -> { ok:true, status, outputUrl, error }
 app.get("/magic/status", (req,res)=>{
   const id = (req.query?.id || "").toString().trim();
   if (!id) return res.status(400).json({ ok:false, error:"Missing id" });
@@ -271,19 +266,20 @@ app.get("/magic/status", (req,res)=>{
   return res.status(200).json({ ok:true, status, outputUrl, error: job.error || null });
 });
 
-// GET /magic/result
+// GET /magic/result?id=... -> image bytes
 app.get("/magic/result", (req,res)=>{
   const id = (req.query?.id || "").toString().trim();
   if (!id) return res.status(400).send("Missing id");
   const job = magicJobs.get(id);
   if (!job) return res.status(404).send("Not found");
   if (job.status !== "succeeded" || !job.bytes) return res.status(409).send(job.error || "Not ready");
+
   res.setHeader("Content-Type", job.mime || "image/png");
-  res.setHeader("Cache-Control", "private, max-age=3600");
+  res.setHeader("Cache-Control", "no-store");
   return res.status(200).send(job.bytes);
 });
 
-// POST /video/start
+// POST /video/start (multipart: image + optional prompt) -> { ok:true, id }
 app.post("/video/start", upload.single("image"), async (req,res)=>{
   try {
     if (!mustBeOkReplicate(res)) return;
@@ -317,7 +313,7 @@ app.post("/video/start", upload.single("image"), async (req,res)=>{
   }
 });
 
-// GET /video/status
+// GET /video/status?id=... -> { ok:true, status, outputUrl, error }
 app.get("/video/status", async (req,res)=>{
   try {
     if (!mustBeOkReplicate(res)) return;
