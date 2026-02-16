@@ -23,6 +23,7 @@ const OPENAI_API_KEY = process.env.OPENAI_API_KEY || "";
 const OPENAI_IMAGE_MODEL = process.env.OPENAI_IMAGE_MODEL || "gpt-image-1";
 const OPENAI_IMAGE_SIZE = process.env.OPENAI_IMAGE_SIZE || "1024x1024";
 const OPENAI_OUTPUT_FORMAT = process.env.OPENAI_OUTPUT_FORMAT || "png"; // png|jpeg|webp (GPT Image models)
+const OPENAI_IMAGE_QUALITY = process.env.OPENAI_IMAGE_QUALITY || "medium"; // low|medium|high (GPT Image models)
 
 const REPLICATE_API_TOKEN = process.env.REPLICATE_API_TOKEN || "";
 const REPLICATE_VIDEO_OWNER = process.env.REPLICATE_VIDEO_OWNER || "wan-video";
@@ -146,7 +147,12 @@ async function getOpenAIClient() {
 
 async function toPngBuffer(inputBuf) {
   await loadSharp();
-  return await _sharp(inputBuf).png().toBuffer();
+  // Downscale to reduce input image token cost; keep aspect ratio and avoid enlarging.
+  // 512px max dimension is usually enough for i2i guidance while preserving structure 1:1.
+  return await _sharp(inputBuf)
+    .resize({ width: 512, height: 512, fit: 'inside', withoutEnlargement: true })
+    .png()
+    .toBuffer();
 }
 
 async function bufferToOpenAIFile(buf, filename, mime) {
@@ -173,10 +179,11 @@ async function runOpenAIImageMagic({ jobId, file, styleId }) {
 
     // NOTE: For GPT Image models, b64_json is returned by default.
     const result = await client.images.edit({
-      model: OPENAI_IMAGE_MODEL,      // gpt-image-1
-      image: openaiImage,             // can also be [openaiImage]
+      model: OPENAI_IMAGE_MODEL,      // gpt-image-1 (or gpt-image-1-mini)
+      image: openaiImage,
       prompt,
       size: OPENAI_IMAGE_SIZE,
+      quality: OPENAI_IMAGE_QUALITY, // low|medium|high
       output_format: OPENAI_OUTPUT_FORMAT, // png|jpeg|webp
     });
 
@@ -232,7 +239,7 @@ app.get("/health", (_req,res)=>res.status(200).json({
 }));
 app.get("/me", (_req,res)=>res.status(200).json({
   ok:true,
-  image:{ provider:"openai", model:OPENAI_IMAGE_MODEL, size:OPENAI_IMAGE_SIZE, output_format: OPENAI_OUTPUT_FORMAT },
+  image:{ provider:"openai", model:OPENAI_IMAGE_MODEL, size:OPENAI_IMAGE_SIZE, output_format: OPENAI_OUTPUT_FORMAT, quality: OPENAI_IMAGE_QUALITY },
   video:{ provider:"replicate", owner:REPLICATE_VIDEO_OWNER, model:REPLICATE_VIDEO_MODEL, versionPinned:Boolean(REPLICATE_VIDEO_VERSION) },
 }));
 
