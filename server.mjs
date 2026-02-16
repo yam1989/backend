@@ -1,7 +1,6 @@
 // DM-2026 backend (OpenAI Image i2i via images.edit + Replicate Video) — Node 20 + Express
-// FIX: OpenAI sometimes returns URL instead of b64_json. We request response_format="b64_json"
-// and also support URL fallback (download bytes) for robustness.
-// Also converts any uploaded image to PNG before sending to OpenAI (dall-e-2 edits require PNG).
+// FIX: outputUrl MUST be absolute (Flutter downloads it). Returning "/magic/result" breaks with "No host specified in URI".
+// Also: converts uploaded image to PNG for dall-e-2 edits, requests b64_json and supports URL fallback.
 
 import express from "express";
 import multer from "multer";
@@ -13,7 +12,7 @@ const PORT = parseInt(process.env.PORT || "8080", 10);
 
 // ---------- ENV ----------
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || "";
-const OPENAI_IMAGE_MODEL = process.env.OPENAI_IMAGE_MODEL || "dall-e-2"; // your account requires this for edits
+const OPENAI_IMAGE_MODEL = process.env.OPENAI_IMAGE_MODEL || "dall-e-2";
 const OPENAI_IMAGE_SIZE = process.env.OPENAI_IMAGE_SIZE || "1024x1024";
 
 const REPLICATE_API_TOKEN = process.env.REPLICATE_API_TOKEN || "";
@@ -92,6 +91,13 @@ function getStylePrompt(styleId) {
   return `${base} ${extra}`.trim();
 }
 
+function getBaseUrl(req) {
+  // Cloud Run is behind proxy; trust x-forwarded-proto if present
+  const proto = (req.headers["x-forwarded-proto"] || req.protocol || "https").toString().split(",")[0].trim();
+  const host = (req.headers["x-forwarded-host"] || req.get("host") || "").toString().split(",")[0].trim();
+  return `${proto}://${host}`;
+}
+
 // ---------- OpenAI lazy loader (client + toFile) ----------
 let _OpenAI = null;
 let _toFile = null;
@@ -165,9 +171,7 @@ async function runOpenAIImageEdit({ jobId, file, styleId }) {
       bytes = await fetchBytesFromUrl(item.url);
     }
 
-    if (!bytes || !bytes.length) {
-      throw new Error("OpenAI returned no image data (missing b64_json and url)");
-    }
+    if (!bytes || !bytes.length) throw new Error("OpenAI returned no image data (missing b64_json and url)");
     if (bytes.length > MAGIC_MAX_BYTES) throw new Error(`Image too large (${bytes.length} bytes)`);
 
     magicJobs.set(jobId, { status:"succeeded", mime:"image/png", bytes, error:null, createdAt: now() });
@@ -238,7 +242,8 @@ app.get("/magic/status", (req,res)=>{
   if (!job) return res.status(200).json({ ok:true, status:"failed", outputUrl:null, error:"Unknown id or expired" });
 
   const status = job.status || "unknown";
-  const outputUrl = status === "succeeded" ? `/magic/result?id=${encodeURIComponent(id)}` : null;
+  const outputUrl = status === "succeeded" ? `${getBaseUrl(req)}/magic/result?id=${encodeURIComponent(id)}` : null;
+
   return res.status(200).json({ ok:true, status, outputUrl, error: job.error || null });
 });
 
