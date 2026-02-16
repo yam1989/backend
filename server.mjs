@@ -7,10 +7,10 @@
 // POST /video/start (multipart: image + optional prompt) -> { ok:true, id }
 // GET  /video/status?id=... -> { ok:true, status, outputUrl, error }
 //
-// FIXES applied:
-// - OpenAI images.edit: removed unsupported params 'quality' and 'output_format'.
-// - Restored Replicate video endpoints.
-// - Lazy-load OpenAI SDK so container always starts.
+// FIXES:
+// - OpenAI edits endpoint requires model "dall-e-2" (gpt-image-1 is not accepted for images.edit in this SDK/API).
+// - OpenAI images.edit: removed unsupported params (quality/output_format).
+// - Video endpoints restored (Replicate wan-2.2-i2v-fast).
 
 import express from "express";
 import multer from "multer";
@@ -23,8 +23,9 @@ const PORT = parseInt(process.env.PORT || "8080", 10);
 
 // ---------- ENV ----------
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || "";
-const OPENAI_IMAGE_MODEL = process.env.OPENAI_IMAGE_MODEL || "gpt-image-1";
-const OPENAI_IMAGE_SIZE = process.env.OPENAI_IMAGE_SIZE || "auto";
+// IMPORTANT: images.edit currently expects dall-e-2
+const OPENAI_IMAGE_MODEL = process.env.OPENAI_IMAGE_MODEL || "dall-e-2";
+const OPENAI_IMAGE_SIZE = process.env.OPENAI_IMAGE_SIZE || "1024x1024"; // edits generally use fixed sizes
 
 const REPLICATE_API_TOKEN = process.env.REPLICATE_API_TOKEN || "";
 const REPLICATE_VIDEO_OWNER = process.env.REPLICATE_VIDEO_OWNER || "wan-video";
@@ -45,7 +46,7 @@ const STYLE_PROMPTS_JSON = process.env.STYLE_PROMPTS_JSON || "";
 // In-memory async jobs for /magic
 const MAGIC_TTL_MS = parseInt(process.env.MAGIC_TTL_MS || String(60 * 60 * 1000), 10);
 const MAGIC_MAX_BYTES = parseInt(process.env.MAGIC_MAX_BYTES || String(6 * 1024 * 1024), 10);
-const magicJobs = new Map(); // id -> { status, mime, bytes, error, createdAt }
+const magicJobs = new Map();
 
 // ---------- Middleware ----------
 const upload = multer({
@@ -69,9 +70,7 @@ function cleanupMagicJobs() {
 try {
   const timer = setInterval(cleanupMagicJobs, 30 * 1000);
   if (timer && typeof timer.unref === "function") timer.unref();
-} catch {
-  // ignore
-}
+} catch {}
 
 function mustBeOkOpenAI(res) {
   if (!OPENAI_API_KEY) {
@@ -122,25 +121,17 @@ function getStylePrompt(styleId) {
     "Do NOT add new objects. Do NOT remove objects. Do NOT zoom or crop. Do NOT add borders or white margins. " +
     "Make it look expensive: crisp clean lines, smooth solid fills, gentle soft shading, subtle highlights, no paper texture, no noise.";
 
-  const neg =
-    "photo, photorealistic, scan, paper texture, grain, blur, watermark, text, letters, numbers, logo, border, frame, " +
-    "extra objects, extra limbs, wrong pose, different composition, different framing, cropped, zoomed, low quality";
-
   let styleExtra = "";
   if (STYLE_PROMPTS_JSON) {
     try {
       const map = JSON.parse(STYLE_PROMPTS_JSON);
-      if (map && typeof map === "object" && styleId && map[styleId]) {
-        styleExtra = String(map[styleId]);
-      }
-    } catch {
-      // ignore
-    }
+      if (map && typeof map === "object" && styleId && map[styleId]) styleExtra = String(map[styleId]);
+    } catch {}
   } else if (styleId) {
     styleExtra = `Style hint: ${styleId}.`;
   }
 
-  return { prompt: `${base} ${styleExtra}`.trim(), negative: neg };
+  return `${base} ${styleExtra}`.trim();
 }
 
 // ---------- OpenAI lazy loader ----------
@@ -157,14 +148,13 @@ async function getOpenAIClient() {
 async function runOpenAIImageEdit({ jobId, inputBuffer, styleId }) {
   try {
     const client = await getOpenAIClient();
-    const { prompt, negative } = getStylePrompt(styleId);
-    const fullPrompt = `${prompt}\n\nAvoid: ${negative}`;
 
-    // IMPORTANT: do not pass unsupported params (quality/output_format/etc)
+    const prompt = getStylePrompt(styleId);
+
     const result = await client.images.edit({
-      model: OPENAI_IMAGE_MODEL,
+      model: OPENAI_IMAGE_MODEL, // dall-e-2
       image: inputBuffer,
-      prompt: fullPrompt,
+      prompt,
       size: OPENAI_IMAGE_SIZE,
     });
 
@@ -173,9 +163,7 @@ async function runOpenAIImageEdit({ jobId, inputBuffer, styleId }) {
 
     const bytes = Buffer.from(b64, "base64");
     if (!bytes.length) throw new Error("OpenAI returned empty image bytes");
-    if (bytes.length > MAGIC_MAX_BYTES) {
-      throw new Error(`Image too large (${bytes.length} bytes), cap=${MAGIC_MAX_BYTES}`);
-    }
+    if (bytes.length > MAGIC_MAX_BYTES) throw new Error(`Image too large (${bytes.length} bytes)`);
 
     magicJobs.set(jobId, {
       status: "succeeded",
@@ -209,10 +197,7 @@ async function replicateCreatePrediction({ owner, model, version, input }) {
   });
 
   const json = await r.json().catch(() => ({}));
-  if (!r.ok) {
-    const msg = json?.detail || json?.error || r.statusText || "Replicate error";
-    throw new Error(msg);
-  }
+  if (!r.ok) throw new Error(json?.detail || json?.error || r.statusText || "Replicate error");
   return json;
 }
 
@@ -222,10 +207,7 @@ async function replicateGetPrediction(id) {
   });
 
   const json = await r.json().catch(() => ({}));
-  if (!r.ok) {
-    const msg = json?.detail || json?.error || r.statusText || "Replicate error";
-    throw new Error(msg);
-  }
+  if (!r.ok) throw new Error(json?.detail || json?.error || r.statusText || "Replicate error");
   return json;
 }
 
@@ -245,17 +227,7 @@ app.get("/me", (_req, res) => {
     ok: true,
     mode: "openai-image + replicate-video",
     image: { provider: "openai", model: OPENAI_IMAGE_MODEL, size: OPENAI_IMAGE_SIZE },
-    video: {
-      provider: "replicate",
-      owner: REPLICATE_VIDEO_OWNER,
-      model: REPLICATE_VIDEO_MODEL,
-      versionPinned: Boolean(REPLICATE_VIDEO_VERSION),
-      resolution: VIDEO_RESOLUTION,
-      fps: VIDEO_FPS,
-      numFrames: VIDEO_NUM_FRAMES,
-      goFast: VIDEO_GO_FAST,
-      interpolate: VIDEO_INTERPOLATE,
-    },
+    video: { provider: "replicate", owner: REPLICATE_VIDEO_OWNER, model: REPLICATE_VIDEO_MODEL },
   });
 });
 
@@ -273,13 +245,7 @@ app.post("/magic", upload.single("image"), async (req, res) => {
 
     const id = `m_${crypto.randomUUID()}`;
 
-    magicJobs.set(id, {
-      status: "processing",
-      mime: null,
-      bytes: null,
-      error: null,
-      createdAt: now(),
-    });
+    magicJobs.set(id, { status: "processing", createdAt: now() });
 
     runOpenAIImageEdit({ jobId: id, inputBuffer: file.buffer, styleId });
 
@@ -295,9 +261,7 @@ app.get("/magic/status", (req, res) => {
   if (!id) return res.status(400).json({ ok: false, error: "Missing id" });
 
   const job = magicJobs.get(id);
-  if (!job) {
-    return res.status(200).json({ ok: true, status: "failed", outputUrl: null, error: "Unknown id or expired" });
-  }
+  if (!job) return res.status(200).json({ ok: true, status: "failed", outputUrl: null, error: "Unknown id or expired" });
 
   const status = job.status || "unknown";
   const outputUrl = status === "succeeded" ? `/magic/result?id=${encodeURIComponent(id)}` : null;
@@ -312,10 +276,7 @@ app.get("/magic/result", (req, res) => {
 
   const job = magicJobs.get(id);
   if (!job) return res.status(404).send("Not found");
-
-  if (job.status !== "succeeded" || !job.bytes) {
-    return res.status(409).send(job.error || "Not ready");
-  }
+  if (job.status !== "succeeded" || !job.bytes) return res.status(409).send(job.error || "Not ready");
 
   res.setHeader("Content-Type", job.mime || "image/png");
   res.setHeader("Cache-Control", "private, max-age=3600");
