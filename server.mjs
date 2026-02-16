@@ -1,20 +1,16 @@
 // DM-2026 backend (OpenAI Image + Replicate Video) — Node 20 + Express
-// IMPORTANT: Keep existing endpoints EXACTLY (do not rename):
-// GET  /
-// GET  /health
-// GET  /me
+// FIX: lazy-load OpenAI SDK so container still starts even if dependency is missing.
+// IMPORTANT: Keep endpoints EXACTLY:
+// GET  /, /health, /me
 // POST /magic (multipart: image + styleId) -> { ok:true, id }
 // GET  /magic/status?id=... -> { ok:true, status, outputUrl, error }
 // POST /video/start (multipart: image + optional prompt) -> { ok:true, id }
 // GET  /video/status?id=... -> { ok:true, status, outputUrl, error }
-//
-// Added (needed by Flutter downloader after /magic/status):
-// GET  /magic/result?id=... -> returns image bytes
+// Added: GET /magic/result?id=... -> returns image bytes
 
 import express from "express";
 import multer from "multer";
 import crypto from "crypto";
-import OpenAI from "openai";
 
 const app = express();
 app.disable("x-powered-by");
@@ -25,16 +21,16 @@ const PORT = parseInt(process.env.PORT || "8080", 10);
 // OpenAI (Image)
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || "";
 const OPENAI_IMAGE_MODEL = process.env.OPENAI_IMAGE_MODEL || "gpt-image-1";
-const OPENAI_IMAGE_SIZE = process.env.OPENAI_IMAGE_SIZE || "auto"; // prefer "auto" to avoid forced square
-const OPENAI_IMAGE_QUALITY = process.env.OPENAI_IMAGE_QUALITY || "high"; // low|medium|high|auto
-const OPENAI_IMAGE_OUTPUT_FORMAT = process.env.OPENAI_IMAGE_OUTPUT_FORMAT || "png"; // png|jpeg|webp
-const OPENAI_IMAGE_INPUT_FIDELITY = process.env.OPENAI_IMAGE_INPUT_FIDELITY || "high"; // best effort for 1:1
+const OPENAI_IMAGE_SIZE = process.env.OPENAI_IMAGE_SIZE || "auto";
+const OPENAI_IMAGE_QUALITY = process.env.OPENAI_IMAGE_QUALITY || "high";
+const OPENAI_IMAGE_OUTPUT_FORMAT = process.env.OPENAI_IMAGE_OUTPUT_FORMAT || "png";
+const OPENAI_IMAGE_INPUT_FIDELITY = process.env.OPENAI_IMAGE_INPUT_FIDELITY || "high";
 
 // Replicate (Video)
 const REPLICATE_API_TOKEN = process.env.REPLICATE_API_TOKEN || "";
 const REPLICATE_VIDEO_OWNER = process.env.REPLICATE_VIDEO_OWNER || "wan-video";
 const REPLICATE_VIDEO_MODEL = process.env.REPLICATE_VIDEO_MODEL || "wan-2.2-i2v-fast";
-const REPLICATE_VIDEO_VERSION = process.env.REPLICATE_VIDEO_VERSION || ""; // optional pin
+const REPLICATE_VIDEO_VERSION = process.env.REPLICATE_VIDEO_VERSION || "";
 
 const VIDEO_INPUT_KEY = process.env.VIDEO_INPUT_KEY || "image";
 const VIDEO_PROMPT_KEY = process.env.VIDEO_PROMPT_KEY || "prompt";
@@ -49,18 +45,15 @@ const VIDEO_INTERPOLATE = (process.env.VIDEO_INTERPOLATE || "false").toLowerCase
 // STYLE_PROMPTS_JSON='{"styleId1":"...","styleId2":"..."}'
 const STYLE_PROMPTS_JSON = process.env.STYLE_PROMPTS_JSON || "";
 
-// In-memory job store for /magic (async)
-// NOTE: Cloud Run instances can scale to 0 and memory is not shared across instances.
-// This still works for "one request -> same instance polling" in typical usage, but for production
-// you may want Redis/GCS. Keeping memory store as requested.
-const MAGIC_TTL_MS = parseInt(process.env.MAGIC_TTL_MS || String(60 * 60 * 1000), 10); // 1h
-const MAGIC_MAX_BYTES = parseInt(process.env.MAGIC_MAX_BYTES || String(4 * 1024 * 1024), 10); // 4MB
+// In-memory job store for /magic
+const MAGIC_TTL_MS = parseInt(process.env.MAGIC_TTL_MS || String(60 * 60 * 1000), 10);
+const MAGIC_MAX_BYTES = parseInt(process.env.MAGIC_MAX_BYTES || String(4 * 1024 * 1024), 10);
 const magicJobs = new Map(); // id -> { status, mime, bytes, error, createdAt }
 
 // ---------- Middleware ----------
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 15 * 1024 * 1024 }, // 15MB
+  limits: { fileSize: 15 * 1024 * 1024 },
 });
 
 // ---------- Utilities ----------
@@ -76,7 +69,12 @@ function cleanupMagicJobs() {
     }
   }
 }
-setInterval(cleanupMagicJobs, 30 * 1000).unref?.();
+try {
+  const t = setInterval(cleanupMagicJobs, 30 * 1000);
+  if (t && typeof t.unref === "function") t.unref();
+} catch {
+  // ignore
+}
 
 function mustBeOkOpenAI(res) {
   if (!OPENAI_API_KEY) {
@@ -149,7 +147,6 @@ function getStylePrompt(styleId) {
       // ignore invalid JSON
     }
   } else if (styleId) {
-    // fallback: treat styleId as hint text
     styleExtra = `Style hint: ${styleId}.`;
   }
 
@@ -194,20 +191,38 @@ async function replicateGetPrediction(id) {
 }
 
 // ---------- OpenAI image pipeline (async) ----------
+// Lazy-load OpenAI SDK so startup doesn't crash if dependency missing.
+let _OpenAI = null;
+async function getOpenAIClient() {
+  if (_OpenAI === null) {
+    try {
+      const mod = await import("openai");
+      _OpenAI = mod?.default || mod?.OpenAI || null;
+    } catch (e) {
+      _OpenAI = null;
+      throw new Error(
+        "OpenAI SDK is not installed. Add dependency 'openai' in package.json and redeploy. " +
+          (e?.message ? `(${e.message})` : "")
+      );
+    }
+  }
+  if (!_OpenAI) throw new Error("OpenAI SDK import failed");
+  return new _OpenAI({ apiKey: OPENAI_API_KEY });
+}
+
 async function runOpenAIImageEdit({ jobId, inputBuffer, styleId }) {
   try {
-    const client = new OpenAI({ apiKey: OPENAI_API_KEY });
+    const client = await getOpenAIClient();
     const { prompt, negative } = getStylePrompt(styleId);
     const fullPrompt = `${prompt}\n\nAvoid: ${negative}`;
 
     const result = await client.images.edit({
       model: OPENAI_IMAGE_MODEL,
-      image: inputBuffer, // Buffer supported by openai Node SDK
+      image: inputBuffer,
       prompt: fullPrompt,
       size: OPENAI_IMAGE_SIZE,
       quality: OPENAI_IMAGE_QUALITY,
       output_format: OPENAI_IMAGE_OUTPUT_FORMAT,
-      // best-effort knob for preservation; ignored if unsupported
       input_fidelity: OPENAI_IMAGE_INPUT_FIDELITY,
     });
 
@@ -275,8 +290,7 @@ app.get("/me", (_req, res) => {
   });
 });
 
-// POST /magic (multipart: image + styleId)
-// Returns { ok:true, id } (NO output immediately)
+// POST /magic
 app.post("/magic", upload.single("image"), async (req, res) => {
   try {
     if (!mustBeOkOpenAI(res)) return;
@@ -298,7 +312,6 @@ app.post("/magic", upload.single("image"), async (req, res) => {
       createdAt: now(),
     });
 
-    // fire-and-forget
     runOpenAIImageEdit({
       jobId: id,
       inputBuffer: file.buffer,
@@ -311,15 +324,13 @@ app.post("/magic", upload.single("image"), async (req, res) => {
   }
 });
 
-// GET /magic/status?id=...
-// Returns { ok:true, status, outputUrl, error }
+// GET /magic/status
 app.get("/magic/status", (req, res) => {
   const id = (req.query?.id || "").toString().trim();
   if (!id) return res.status(400).json({ ok: false, error: "Missing id" });
 
   const job = magicJobs.get(id);
   if (!job) {
-    // keep polling stable
     return res.status(200).json({
       ok: true,
       status: "failed",
@@ -339,8 +350,7 @@ app.get("/magic/status", (req, res) => {
   });
 });
 
-// GET /magic/result?id=...
-// Returns raw image bytes
+// GET /magic/result
 app.get("/magic/result", (req, res) => {
   const id = (req.query?.id || "").toString().trim();
   if (!id) return res.status(400).send("Missing id");
@@ -357,8 +367,7 @@ app.get("/magic/result", (req, res) => {
   return res.status(200).send(job.bytes);
 });
 
-// POST /video/start (multipart: image + optional prompt)
-// Returns { ok:true, id }
+// POST /video/start
 app.post("/video/start", upload.single("image"), async (req, res) => {
   try {
     if (!mustBeOkReplicate(res)) return;
@@ -397,8 +406,7 @@ app.post("/video/start", upload.single("image"), async (req, res) => {
   }
 });
 
-// GET /video/status?id=...
-// Returns { ok:true, status, outputUrl, error }
+// GET /video/status
 app.get("/video/status", async (req, res) => {
   try {
     if (!mustBeOkReplicate(res)) return;
