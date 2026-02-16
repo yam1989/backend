@@ -156,6 +156,26 @@ async function toPngBufferMax1024(inputBuf) {
     .toBuffer();
 }
 
+// Preprocess VIDEO input to avoid "small picture inside black square" in the final MP4.
+// We TRIM solid borders (often black/white padding) and keep aspect ratio.
+// This keeps Android Gallery fullscreen behavior like before.
+async function toPngBufferVideoInput(inputBuf) {
+  await loadSharp();
+  let img = _sharp(inputBuf);
+
+  // Remove uniform borders (black/white) if present.
+  // threshold is small to not eat real content.
+  try {
+    img = img.trim({ threshold: 12 });
+  } catch {}
+
+  // Keep aspect ratio, do not enlarge; cap max dimension to 1024 for cost/control.
+  return await img
+    .resize({ width: 1024, height: 1024, fit: "inside", withoutEnlargement: true })
+    .png()
+    .toBuffer();
+}
+
 async function bufferToOpenAIFile(buf, filename, mime) {
   await loadOpenAI();
   return await _toFile(buf, filename, { type: mime });
@@ -320,7 +340,8 @@ STRICTLY no new objects or details.
 Loop-friendly. Smooth. Clean.
 `;
 
-    const dataUri = bufferToDataUri(file.buffer, file.mimetype);
+    const videoPng = await toPngBufferVideoInput(file.buffer);
+    const dataUri = bufferToDataUri(videoPng, "image/png");
     const input = {
       [VIDEO_INPUT_KEY]: dataUri,
       [VIDEO_PROMPT_KEY]: prompt,
