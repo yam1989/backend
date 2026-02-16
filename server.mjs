@@ -1,6 +1,7 @@
 // DM-2026 backend (OpenAI Image i2i via images.edit + Replicate Video) — Node 20 + Express
-// FIX: OpenAI edits for dall-e-2 often requires PNG input. Flutter may upload as application/octet-stream or JPEG.
-// We convert ANY incoming image buffer to PNG (using sharp) before sending to OpenAI, and force mimetype image/png.
+// FIX: OpenAI sometimes returns URL instead of b64_json. We request response_format="b64_json"
+// and also support URL fallback (download bytes) for robustness.
+// Also converts any uploaded image to PNG before sending to OpenAI (dall-e-2 edits require PNG).
 
 import express from "express";
 import multer from "multer";
@@ -12,7 +13,7 @@ const PORT = parseInt(process.env.PORT || "8080", 10);
 
 // ---------- ENV ----------
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || "";
-const OPENAI_IMAGE_MODEL = process.env.OPENAI_IMAGE_MODEL || "dall-e-2"; // required in your case
+const OPENAI_IMAGE_MODEL = process.env.OPENAI_IMAGE_MODEL || "dall-e-2"; // your account requires this for edits
 const OPENAI_IMAGE_SIZE = process.env.OPENAI_IMAGE_SIZE || "1024x1024";
 
 const REPLICATE_API_TOKEN = process.env.REPLICATE_API_TOKEN || "";
@@ -107,7 +108,6 @@ async function loadOpenAI() {
 
 async function loadSharp() {
   if (_sharp) return;
-  // sharp is optional but recommended
   const mod = await import("sharp");
   _sharp = mod.default || mod;
 }
@@ -118,14 +118,12 @@ async function getOpenAIClient() {
 }
 
 function isPng(buf) {
-  if (!buf || buf.length < 8) return false;
-  return buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4E && buf[3] === 0x47;
+  return buf && buf.length >= 8 && buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4E && buf[3] === 0x47;
 }
 
 async function ensurePngBuffer(inputBuf) {
   if (isPng(inputBuf)) return inputBuf;
   await loadSharp();
-  // Convert any common format to PNG
   return await _sharp(inputBuf).png().toBuffer();
 }
 
@@ -133,6 +131,13 @@ async function bufferToOpenAIFileAsPng(file) {
   await loadOpenAI();
   const pngBuf = await ensurePngBuffer(file.buffer);
   return await _toFile(pngBuf, "image.png", { type: "image/png" });
+}
+
+async function fetchBytesFromUrl(url) {
+  const r = await fetch(url);
+  if (!r.ok) throw new Error(`Failed to download OpenAI image URL: ${r.status} ${r.statusText}`);
+  const arr = await r.arrayBuffer();
+  return Buffer.from(arr);
 }
 
 // ---------- OpenAI image pipeline ----------
@@ -144,17 +149,25 @@ async function runOpenAIImageEdit({ jobId, file, styleId }) {
     const openaiFile = await bufferToOpenAIFileAsPng(file);
 
     const result = await client.images.edit({
-      model: OPENAI_IMAGE_MODEL, // dall-e-2
+      model: OPENAI_IMAGE_MODEL,
       image: openaiFile,
       prompt,
       size: OPENAI_IMAGE_SIZE,
+      response_format: "b64_json",
     });
 
-    const b64 = result?.data?.[0]?.b64_json;
-    if (!b64) throw new Error("OpenAI returned no image data (missing b64_json)");
+    const item = result?.data?.[0];
+    let bytes = null;
 
-    const bytes = Buffer.from(b64, "base64");
-    if (!bytes.length) throw new Error("OpenAI returned empty image bytes");
+    if (item?.b64_json) {
+      bytes = Buffer.from(item.b64_json, "base64");
+    } else if (item?.url) {
+      bytes = await fetchBytesFromUrl(item.url);
+    }
+
+    if (!bytes || !bytes.length) {
+      throw new Error("OpenAI returned no image data (missing b64_json and url)");
+    }
     if (bytes.length > MAGIC_MAX_BYTES) throw new Error(`Image too large (${bytes.length} bytes)`);
 
     magicJobs.set(jobId, { status:"succeeded", mime:"image/png", bytes, error:null, createdAt: now() });
@@ -186,11 +199,17 @@ async function replicateGetPrediction(id) {
 
 // ---------- Routes ----------
 app.get("/", (_req,res)=>res.status(200).send("DM-2026 backend: ok"));
-app.get("/health", (_req,res)=>res.status(200).json({ ok:true, openaiKey:Boolean(OPENAI_API_KEY), replicateKey:Boolean(REPLICATE_API_TOKEN) }));
+
+app.get("/health", (_req,res)=>res.status(200).json({
+  ok:true,
+  openaiKey:Boolean(OPENAI_API_KEY),
+  replicateKey:Boolean(REPLICATE_API_TOKEN),
+}));
+
 app.get("/me", (_req,res)=>res.status(200).json({
   ok:true,
   image:{ provider:"openai", model:OPENAI_IMAGE_MODEL, size:OPENAI_IMAGE_SIZE },
-  video:{ provider:"replicate", owner:REPLICATE_VIDEO_OWNER, model:REPLICATE_VIDEO_MODEL, versionPinned:Boolean(REPLICATE_VIDEO_VERSION) }
+  video:{ provider:"replicate", owner:REPLICATE_VIDEO_OWNER, model:REPLICATE_VIDEO_MODEL, versionPinned:Boolean(REPLICATE_VIDEO_VERSION) },
 }));
 
 // POST /magic
