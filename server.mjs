@@ -156,25 +156,28 @@ async function toPngBufferMax1024(inputBuf) {
     .toBuffer();
 }
 
-// Preprocess VIDEO input to avoid "small picture inside black square" in the final MP4.
-// We TRIM solid borders (often black/white padding) and keep aspect ratio.
-// This keeps Android Gallery fullscreen behavior like before.
-async function toPngBufferVideoInput(inputBuf) {
+
+async function chooseOpenAIImageSizeFromBuffer(inputBuf) {
+  // gpt-image-1 supports these canonical sizes. We pick the closest orientation
+  // to preserve framing and avoid the model "zooming/cropping" into a square.
   await loadSharp();
-  let img = _sharp(inputBuf);
+  const meta = await _sharp(inputBuf).metadata();
+  const w = meta?.width || 0;
+  const h = meta?.height || 0;
+  if (!w || !h) return OPENAI_IMAGE_SIZE;
 
-  // Remove uniform borders (black/white) if present.
-  // threshold is small to not eat real content.
-  try {
-    img = img.trim({ threshold: 12 });
-  } catch {}
+  // If caller forced a specific size via env, allow "auto" behavior only when
+  // OPENAI_IMAGE_SIZE is "auto" or empty.
+  const envSize = (OPENAI_IMAGE_SIZE || "").trim().toLowerCase();
+  const allowAuto = envSize === "auto" || envSize === "";
+  if (!allowAuto) return OPENAI_IMAGE_SIZE;
 
-  // Keep aspect ratio, do not enlarge; cap max dimension to 1024 for cost/control.
-  return await img
-    .resize({ width: 1024, height: 1024, fit: "inside", withoutEnlargement: true })
-    .png()
-    .toBuffer();
+  const ratio = w / h;
+  if (ratio >= 1.18) return "1536x1024"; // landscape
+  if (ratio <= 0.85) return "1024x1536"; // portrait
+  return "1024x1024"; // near square
 }
+
 
 async function bufferToOpenAIFile(buf, filename, mime) {
   await loadOpenAI();
@@ -197,12 +200,13 @@ async function runOpenAIImageMagic({ jobId, file, styleId }) {
     // Convert input to PNG and cap max dimension to 1024 (cheaper than raw, but preserves framing better than 512)
     const pngBuf = await toPngBufferMax1024(file.buffer);
     const openaiImage = await bufferToOpenAIFile(pngBuf, "input.png", "image/png");
+    const chosenSize = await chooseOpenAIImageSizeFromBuffer(pngBuf);
 
     const result = await client.images.edit({
       model: OPENAI_IMAGE_MODEL,          // gpt-image-1 or gpt-image-1-mini
       image: openaiImage,
       prompt,
-      size: OPENAI_IMAGE_SIZE,            // keep 1024x1024 for stable framing
+      size: chosenSize || OPENAI_IMAGE_SIZE,
       quality: OPENAI_IMAGE_QUALITY,      // low|medium|high
       output_format: OPENAI_OUTPUT_FORMAT // png|jpeg|webp
     });
@@ -340,8 +344,7 @@ STRICTLY no new objects or details.
 Loop-friendly. Smooth. Clean.
 `;
 
-    const videoPng = await toPngBufferVideoInput(file.buffer);
-    const dataUri = bufferToDataUri(videoPng, "image/png");
+    const dataUri = bufferToDataUri(file.buffer, file.mimetype);
     const input = {
       [VIDEO_INPUT_KEY]: dataUri,
       [VIDEO_PROMPT_KEY]: prompt,
