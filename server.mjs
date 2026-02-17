@@ -1,30 +1,24 @@
-// DM-2026 backend — Cloud Run (Node 20 + Express)
-// IMAGE v4.1 (WAU + CLEAN + APP-COMPAT)
+
+// DM-2026 backend — IMAGE v5.0 (FLUX WAU MODE)
+// Model: black-forest-labs/flux-dev (Replicate)
 
 import express from "express";
 import multer from "multer";
 import crypto from "crypto";
 
-const VERSION = "DM-2026 IMAGE v4.1";
+const VERSION = "DM-2026 IMAGE v5.0 FLUX WAU";
 
 const app = express();
 app.disable("x-powered-by");
 
 const PORT = Number(process.env.PORT || 8080);
 
-// ===== REPLICATE =====
 const REPLICATE_API_TOKEN = process.env.REPLICATE_API_TOKEN || "";
-const DEFAULT_IMAGE_VERSION = "db2ffdbdc7f6cb4d6dab512434679ee3366ae7ab84f89750f8947d5594b79a47";
-const REPLICATE_IMAGE_VERSION = (process.env.REPLICATE_IMAGE_VERSION || DEFAULT_IMAGE_VERSION).trim();
+const REPLICATE_IMAGE_MODEL = "black-forest-labs/flux-dev";
 
-// ===== TUNING =====
-const SD_STEPS = Number(process.env.SD_STEPS || 26);
-const SD_CONDITION_SCALE = Number(process.env.SD_CONDITION_SCALE || 0.60);
-const SD_SEED = Number(process.env.SD_SEED || 0);
-const PAD_SIZE = Number(process.env.SD_PAD_SIZE || 768);
-
-const SD_NEGATIVE_PROMPT =
-  "photo, photograph, paper texture, scan, grayscale, monochrome, pencil sketch, low quality, blurry, noise, text, watermark";
+const STEPS = Number(process.env.SD_STEPS || 28);
+const GUIDANCE = Number(process.env.SD_GUIDANCE || 3.5);
+const SEED = Number(process.env.SD_SEED || 0);
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -37,15 +31,19 @@ function bufferToDataUri(buf, mime) {
   return `data:${mime || "image/png"};base64,${Buffer.from(buf).toString("base64")}`;
 }
 
-async function replicateCreate(version, input) {
+async function replicateCreate(input) {
   const r = await fetch("https://api.replicate.com/v1/predictions", {
     method: "POST",
     headers: {
       Authorization: `Token ${REPLICATE_API_TOKEN}`,
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({ version, input }),
+    body: JSON.stringify({
+      model: REPLICATE_IMAGE_MODEL,
+      input
+    }),
   });
+
   const json = await r.json();
   if (!r.ok) throw new Error(json?.detail || "Replicate error");
   return json;
@@ -62,10 +60,11 @@ async function replicateGet(id) {
 
 function buildPrompt() {
   return `
-Transform this child’s drawing into a high-end Pixar-style 3D illustration.
-Preserve main structure approximately (minor beautification allowed).
-Make it full color, cinematic lighting, soft shadows, smooth gradients.
-Clean background. Premium animated movie quality.
+Repaint this child's drawing into a premium Pixar-style 3D illustration.
+Allow small proportional beautification.
+Rich color, cinematic lighting, global illumination,
+soft shadows, depth, smooth gradients.
+Clean background. No paper texture. Animated movie quality.
 `.trim();
 }
 
@@ -78,16 +77,15 @@ app.post("/magic", upload.single("image"), async (req, res) => {
     const input = {
       image,
       prompt: buildPrompt(),
-      negative_prompt: SD_NEGATIVE_PROMPT,
-      num_inference_steps: SD_STEPS,
-      condition_scale: SD_CONDITION_SCALE,
-      seed: SD_SEED,
+      num_inference_steps: STEPS,
+      guidance_scale: GUIDANCE,
+      seed: SEED,
     };
 
-    const pred = await replicateCreate(REPLICATE_IMAGE_VERSION, input);
+    const pred = await replicateCreate(input);
 
     const id = `m_${crypto.randomUUID()}`;
-    magicJobs.set(id, { predId: pred.id, status: "processing" });
+    magicJobs.set(id, { predId: pred.id });
 
     res.json({ ok: true, id });
   } catch (e) {
@@ -120,5 +118,5 @@ app.get("/me", (_req,res)=>res.json({
 }));
 
 app.listen(PORT, "0.0.0.0", () => {
-  console.log("WAU MODE v4.1 ACTIVE");
+  console.log("🔥 FLUX WAU MODE ACTIVE");
 });
