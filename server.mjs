@@ -266,16 +266,17 @@ ${guard}`,
     const outPath = path.join(JOBS_DIR, `${jobId}.png`);
     await fs.promises.writeFile(outPath, finalPng);
 
-    jobs.set(jobId, {
-      status: "done",
-      kind: "image",
-      outputUrl: `${PUBLIC_BASE_URL}/magic/result?id=${jobId}`,
-      bytes: finalPng.length
+    magicJobs.set(jobId, {
+      status: "succeeded",
+      bytes: finalPng,
+      mime: "image/png",
+      bytesLength: finalPng.length,
+      doneAt: now()
     });
-  } catch (err) {
+} catch (err) {
     console.error("[magic] error:", err);
-    jobs.set(jobId, { status: "error", error: String(err?.message || err) });
-  }
+    magicJobs.set(jobId, { status: "failed", error: String(err?.message || err), doneAt: now() });
+}
 }
 
 // ---------- Replicate API (Video) ----------
