@@ -1,19 +1,19 @@
 // DM-2026 backend — Cloud Run (Node 20 + Express)
 // ✅ Endpoints FIXED: /, /health, /me, /magic, /magic/status, /magic/result, /video/start, /video/status
 //
-// Image Mode v2.5 (Structure-Lock Stylizer) — FIXED input schema for fermatresearch/sdxl-controlnet-lora:
-//   - Uses prompt_strength (NOT strength) per Replicate schema
-//   - condition_scale clamped to <= 1 (per schema max 1)
-//   - Cloud Run safe: /magic creates prediction, /magic/status polls Replicate on-demand
-//   - /magic/status also returns rawOutputUrl for debugging (app can ignore)
+// Image Mode v3.0 (FAST) — lucataco/sdxl-controlnet (SDXL ControlNet Canny)
+//   - Replicate page: "Predictions typically complete within 10 seconds" (model infra is fast)
+//   - Schema fields: image, prompt, negative_prompt, num_inference_steps, condition_scale, seed
+//   - NO background polling (Cloud Run safe). /magic/status polls Replicate on-demand.
+//   - NO crop: pad to square using sharp fit=contain
 //
-// Video Mode: unchanged.
+// Video Mode: Replicate wan-2.2-i2v-fast (unchanged)
 
 import express from "express";
 import multer from "multer";
 import crypto from "crypto";
 
-const VERSION = "server.mjs DM-2026 IMAGE v2.5 (prompt_strength fix + debug raw url)";
+const VERSION = "server.mjs DM-2026 IMAGE v3.0 (lucataco/sdxl-controlnet fast) + replicate video";
 
 const app = express();
 app.disable("x-powered-by");
@@ -23,21 +23,16 @@ const PORT = Number(process.env.PORT || 8080);
 // ===== REPLICATE =====
 const REPLICATE_API_TOKEN = process.env.REPLICATE_API_TOKEN || "";
 
-// Image version (required)
-const DEFAULT_IMAGE_VERSION = "3bb13fe1c33c35987b33792b01b71ed6529d03f165d1c2416375859f09ca9fef";
+// Image model version (pin for stability)
+// Using a known published version hash for lucataco/sdxl-controlnet.
+// You can override via REPLICATE_IMAGE_VERSION.
+const DEFAULT_IMAGE_VERSION = "db2ffdbdc7f6cb4d6dab512434679ee3366ae7ab84f89750f8947d5594b79a47";
 const REPLICATE_IMAGE_VERSION = (process.env.REPLICATE_IMAGE_VERSION || DEFAULT_IMAGE_VERSION).trim();
 
-// ===== IMAGE TUNING (schema-aligned) =====
-const SD_STEPS = Number(process.env.SD_STEPS || 14);
-const SD_GUIDANCE_SCALE = Number(process.env.SD_GUIDANCE_SCALE || 7.0);
-
-// IMPORTANT: This model uses prompt_strength for img2img denoise (0..1).
-// Too low -> returns original. Too high -> destroys structure.
-// We'll default to 0.45 to ensure visible premium rendering.
-const SD_PROMPT_STRENGTH = Number(process.env.SD_PROMPT_STRENGTH || 0.45);
-
-// condition_scale max is 1 for this model version schema.
-const SD_CONDITION_SCALE = Number(process.env.SD_CONDITION_SCALE || 0.9);
+// ===== IMAGE TUNING (lucataco schema) =====
+const SD_STEPS = Number(process.env.SD_STEPS || 14);            // speed/quality
+const SD_CONDITION_SCALE = Number(process.env.SD_CONDITION_SCALE || 0.9); // max 1
+const SD_SEED = Number(process.env.SD_SEED || 0);              // 0=randomize
 
 const SD_NEGATIVE_PROMPT =
   process.env.SD_NEGATIVE_PROMPT ||
@@ -45,11 +40,11 @@ const SD_NEGATIVE_PROMPT =
   "new objects, extra objects, extra characters, background replacement, text, watermark, logo, " +
   "distorted, deformed, changed proportions, clutter, messy";
 
-// Padding (NO crop)
+// Padding (NO crop). Optional speed boost: set SD_PAD_SIZE=768
 const PAD_SIZE = Number(process.env.SD_PAD_SIZE || 1024);
 const PAD_BACKGROUND = (process.env.SD_PAD_BACKGROUND || "#ffffff").trim();
 
-// Optional style map
+// Optional style map (JSON string): {"pixar_3d":"...","watercolor":"..."}
 const STYLE_PROMPTS_JSON = process.env.STYLE_PROMPTS_JSON || "";
 
 // ===== VIDEO (unchanged) =====
@@ -205,12 +200,12 @@ app.get("/me", (_req,res)=>res.status(200).json({
   version: VERSION,
   image: {
     provider: "replicate",
+    model: "lucataco/sdxl-controlnet",
     replicate: {
       version: REPLICATE_IMAGE_VERSION || null,
       steps: SD_STEPS,
-      guidance_scale: SD_GUIDANCE_SCALE,
-      prompt_strength: SD_PROMPT_STRENGTH,
       condition_scale: SD_CONDITION_SCALE,
+      seed: SD_SEED,
       pad_size: PAD_SIZE,
       key: Boolean(REPLICATE_API_TOKEN),
     }
@@ -232,18 +227,15 @@ app.post("/magic", upload.single("image"), async (req,res)=>{
 
     const prompt = getStylePrompt(styleId);
 
-    // ✅ Schema for fermatresearch/sdxl-controlnet-lora uses prompt_strength + condition_scale
+    // ✅ lucataco/sdxl-controlnet schema (from Replicate API tab):
+    // image, prompt, negative_prompt, num_inference_steps, condition_scale (max 1), seed
     const input = {
+      image,
       prompt,
       negative_prompt: SD_NEGATIVE_PROMPT,
-      image,
-      prompt_strength: Math.max(0.10, Math.min(0.80, SD_PROMPT_STRENGTH)),
+      num_inference_steps: Math.max(4, Math.min(60, SD_STEPS)),
       condition_scale: Math.max(0.0, Math.min(1.0, SD_CONDITION_SCALE)),
-      guidance_scale: Math.max(1, Math.min(12, SD_GUIDANCE_SCALE)),
-      num_inference_steps: Math.max(6, Math.min(60, SD_STEPS)),
-      num_outputs: 1,
-      apply_watermark: false,
-      refine: "no_refiner",
+      seed: Number.isFinite(SD_SEED) ? SD_SEED : 0,
     };
 
     const pred = await replicateCreatePredictionVersionOnly({
@@ -417,6 +409,6 @@ process.on("uncaughtException", (e) => console.error("uncaughtException", e));
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`✅ ${VERSION}`);
   console.log(`✅ Listening on 0.0.0.0:${PORT}`);
-  console.log(`✅ IMAGE version-only: ${REPLICATE_IMAGE_VERSION}`);
-  console.log(`✅ Defaults: PAD_SIZE=${PAD_SIZE} STEPS=${SD_STEPS} PROMPT_STRENGTH=${SD_PROMPT_STRENGTH} CONDITION_SCALE=${SD_CONDITION_SCALE}`);
+  console.log(`✅ IMAGE: lucataco/sdxl-controlnet (version-only) ${REPLICATE_IMAGE_VERSION}`);
+  console.log(`✅ DEFAULTS: PAD_SIZE=${PAD_SIZE} STEPS=${SD_STEPS} CONDITION_SCALE=${SD_CONDITION_SCALE} SEED=${SD_SEED}`);
 });
