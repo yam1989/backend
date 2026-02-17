@@ -1,19 +1,15 @@
-# DM-2026 backend — Cloud Run stable
-# Uses Node 20 (built-in fetch) and runs server.mjs
+# DM-2026 Backend — minimal Dockerfile for FLUX image mode
 FROM node:20-slim
 
 WORKDIR /app
 
-# Install deps first (better layer caching)
-COPY package.json package-lock.json* ./
-RUN npm ci --omit=dev || npm install --omit=dev
+# Install only what we need
+COPY package.json ./
+RUN npm install --omit=dev
 
-# Copy app code
 COPY server.mjs ./
 
-ENV NODE_ENV=production
 ENV PORT=8080
-
 EXPOSE 8080
 
-CMD ["node", "server.mjs"]
+CMD ["npm","start"]
