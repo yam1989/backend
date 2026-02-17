@@ -1,11 +1,11 @@
 // DM-2026 backend — Cloud Run (Node 20 + Express)
-// ✅ Stable startup, listens on PORT
 // ✅ Endpoints FIXED (do not change): /, /health, /me, /magic, /magic/status, /magic/result, /video/start, /video/status
 //
-// Image Mode v2.2 (Structure-Lock Stylizer):
-//   - Replicate SDXL + ControlNet via fermatresearch/sdxl-controlnet-lora
-//   - IMPORTANT FIX: this model REQUIRES {version,input} (NO {model})
-//   - NO crop: pad to 1024x1024 using "contain" (letterbox), preserves full composition
+// Image Mode v2.3 (Structure-Lock Stylizer) — Cloud Run SAFE:
+//   - Replicate SDXL + ControlNet (fermatresearch/sdxl-controlnet-lora)
+//   - IMPORTANT: this model requires {version,input} (NO {model})
+//   - IMPORTANT: NO background polling jobs (Cloud Run CPU throttles after response)
+//     We create prediction quickly, store predictionId, and /magic/status polls Replicate on-demand.
 //
 // Video Mode: Replicate wan-2.2-i2v-fast (unchanged)
 
@@ -13,7 +13,7 @@ import express from "express";
 import multer from "multer";
 import crypto from "crypto";
 
-const VERSION = "server.mjs DM-2026 IMAGE v2.2 (ControlNet version-required + id/status contract) + replicate video";
+const VERSION = "server.mjs DM-2026 IMAGE v2.3 (no-background-polling, version-only) + replicate video";
 
 const app = express();
 app.disable("x-powered-by");
@@ -22,19 +22,16 @@ app.disable("x-powered-by");
 const PORT = Number(process.env.PORT || 8080);
 
 // ---------- ENV ----------
-const IMAGE_PROVIDER_DEFAULT = "replicate";
-
-// Replicate
 const REPLICATE_API_TOKEN = process.env.REPLICATE_API_TOKEN || "";
 
-// Replicate Image (ControlNet SDXL) — version required
+// Image version (required)
 const DEFAULT_IMAGE_VERSION = "3bb13fe1c33c35987b33792b01b71ed6529d03f165d1c2416375859f09ca9fef";
 const REPLICATE_IMAGE_VERSION = (process.env.REPLICATE_IMAGE_VERSION || DEFAULT_IMAGE_VERSION).trim();
 
 // Tuning
-const SD_STEPS = Number(process.env.SD_STEPS || 22);
+const SD_STEPS = Number(process.env.SD_STEPS || 20); // slightly faster default
 const SD_GUIDANCE_SCALE = Number(process.env.SD_GUIDANCE_SCALE || 6.5);
-const SD_STRENGTH = Number(process.env.SD_PROMPT_STRENGTH || 0.32); // keep env name for compatibility
+const SD_STRENGTH = Number(process.env.SD_PROMPT_STRENGTH || 0.30);
 const SD_CONDITION_SCALE = Number(process.env.SD_CONDITION_SCALE || 0.85);
 
 const SD_NEGATIVE_PROMPT =
@@ -71,8 +68,7 @@ const upload = multer({
 
 // ---------- In-memory jobs for /magic ----------
 const MAGIC_TTL_MS = Number(process.env.MAGIC_TTL_MS || 60 * 60 * 1000);
-const MAGIC_MAX_BYTES = Number(process.env.MAGIC_MAX_BYTES || 10 * 1024 * 1024);
-const magicJobs = new Map(); // id -> {status, mime, bytes, error, createdAt}
+const magicJobs = new Map(); // id -> {status, predId, outputUrl, error, createdAt}
 
 function now() { return Date.now(); }
 
@@ -85,8 +81,6 @@ function cleanupMagicJobs() {
 try { const timer = setInterval(cleanupMagicJobs, 30_000); timer?.unref?.(); } catch {}
 
 // ---------- Utilities ----------
-function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
-
 function getBaseUrl(req) {
   const proto = String(req.headers["x-forwarded-proto"] || req.protocol || "https").split(",")[0].trim();
   const host = String(req.headers["x-forwarded-host"] || req.get("host") || "").split(",")[0].trim();
@@ -160,11 +154,10 @@ async function padSquarePng(buf, size = 1024, background = "#ffffff") {
 
 // ---------- Replicate API ----------
 async function replicateCreatePredictionVersionOnly({ version, input }) {
-  const body = { version, input }; // IMPORTANT: model not allowed
   const r = await fetch("https://api.replicate.com/v1/predictions", {
     method:"POST",
     headers:{ Authorization:`Token ${REPLICATE_API_TOKEN}`, "Content-Type":"application/json" },
-    body: JSON.stringify(body),
+    body: JSON.stringify({ version, input }), // IMPORTANT: model not allowed
   });
   const json = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(json?.detail || json?.error || r.statusText || "Replicate error");
@@ -172,7 +165,6 @@ async function replicateCreatePredictionVersionOnly({ version, input }) {
 }
 
 async function replicateCreatePredictionModelOrVersion({ owner, model, version, input }) {
-  // Video can use either version or model fallback
   const body = version ? { version, input } : { model: `${owner}/${model}`, input };
   const r = await fetch("https://api.replicate.com/v1/predictions", {
     method:"POST",
@@ -193,19 +185,52 @@ async function replicateGetPrediction(id) {
   return json;
 }
 
-// ---------- Image pipeline ----------
-async function runReplicateImageMagic({ jobId, file, styleId }) {
+// ---------- Routes ----------
+app.get("/", (_req,res)=>res.status(200).send("DM-2026 backend: ok"));
+
+app.get("/health", (_req,res)=>res.status(200).json({
+  ok:true,
+  version: VERSION,
+  replicateKey: Boolean(REPLICATE_API_TOKEN),
+}));
+
+app.get("/me", (_req,res)=>res.status(200).json({
+  ok:true,
+  version: VERSION,
+  image: {
+    provider: "replicate",
+    replicate: {
+      version: REPLICATE_IMAGE_VERSION || null,
+      steps: SD_STEPS,
+      guidance_scale: SD_GUIDANCE_SCALE,
+      strength: SD_STRENGTH,
+      condition_scale: SD_CONDITION_SCALE,
+      pad_size: PAD_SIZE,
+      key: Boolean(REPLICATE_API_TOKEN),
+    }
+  },
+  video: { provider:"replicate", owner: REPLICATE_VIDEO_OWNER, model: REPLICATE_VIDEO_MODEL, version: REPLICATE_VIDEO_VERSION || null },
+}));
+
+// POST /magic — returns {id} immediately
+app.post("/magic", upload.single("image"), async (req,res)=>{
   try {
-    const prompt = getStylePrompt(styleId);
-    const framingGuard =
-      "Preserve the full original drawing and composition. Do NOT zoom in. Do NOT crop. Do NOT reframe. Do NOT move objects.";
-    const fullPrompt = `${prompt}\n\n${framingGuard}`;
+    if (!mustBeOkReplicate(res)) return;
+
+    const file = req.file;
+    const styleId = String(req.body?.styleId || "").trim();
+    if (!file?.buffer || file.buffer.length < 10) return res.status(400).json({ ok:false, error:"Missing image" });
 
     // preprocess: pad to square 1024 WITHOUT CROP
     const lockedPng = await padSquarePng(file.buffer, PAD_SIZE, PAD_BACKGROUND);
     const image = bufferToDataUri(lockedPng, "image/png");
 
-    // Model input schema (fermatresearch/sdxl-controlnet-lora)
+    const prompt = getStylePrompt(styleId);
+    const framingGuard =
+      "Preserve the full original drawing and composition. Do NOT zoom in. Do NOT crop. Do NOT reframe. Do NOT move objects.";
+    const fullPrompt = `${prompt}\n\n${framingGuard}`;
+
+    // Create prediction (fast) — NO background polling
     const input = {
       prompt: fullPrompt,
       negative_prompt: SD_NEGATIVE_PROMPT,
@@ -220,85 +245,19 @@ async function runReplicateImageMagic({ jobId, file, styleId }) {
       refine: "no_refiner",
     };
 
-    // IMPORTANT: version only
     const pred = await replicateCreatePredictionVersionOnly({
       version: REPLICATE_IMAGE_VERSION,
       input,
     });
 
-    // poll
-    let cur = pred;
-    const t0 = Date.now();
-    while (true) {
-      const st = cur?.status;
-      if (st === "succeeded") break;
-      if (st === "failed" || st === "canceled") throw new Error(cur?.error || `Replicate image failed (${st})`);
-      if (Date.now() - t0 > 240_000) throw new Error("Replicate image timeout");
-      await sleep(900);
-      cur = await replicateGetPrediction(cur.id);
-    }
-
-    const outUrl = Array.isArray(cur?.output) ? cur.output[0] : cur?.output;
-    if (!outUrl || typeof outUrl !== "string") throw new Error("Replicate image: missing output URL");
-
-    const r = await fetch(outUrl);
-    if (!r.ok) throw new Error(`Failed to download image output (${r.status})`);
-    const mime = r.headers.get("content-type") || "image/png";
-    const bytes = Buffer.from(await r.arrayBuffer());
-    if (bytes.length > MAGIC_MAX_BYTES) throw new Error(`Image too large (${bytes.length} bytes)`);
-
-    magicJobs.set(jobId, { status:"succeeded", mime, bytes, error:null, createdAt: now() });
-  } catch (e) {
-    magicJobs.set(jobId, { status:"failed", mime:null, bytes:null, error:String(e?.message || e), createdAt: now() });
-  }
-}
-
-// ---------- Routes ----------
-app.get("/", (_req,res)=>res.status(200).send("DM-2026 backend: ok"));
-
-app.get("/health", (_req,res)=>res.status(200).json({
-  ok:true,
-  version: VERSION,
-  replicateKey: Boolean(REPLICATE_API_TOKEN),
-}));
-
-app.get("/me", (_req,res)=>res.status(200).json({
-  ok:true,
-  version: VERSION,
-  image: {
-    provider: IMAGE_PROVIDER_DEFAULT,
-    replicate: {
-      version: REPLICATE_IMAGE_VERSION || null,
-      steps: SD_STEPS,
-      guidance_scale: SD_GUIDANCE_SCALE,
-      strength: SD_STRENGTH,
-      condition_scale: SD_CONDITION_SCALE,
-      pad_size: PAD_SIZE,
-      key: Boolean(REPLICATE_API_TOKEN),
-    }
-  },
-  video: {
-    provider:"replicate",
-    owner: REPLICATE_VIDEO_OWNER,
-    model: REPLICATE_VIDEO_MODEL,
-    version: REPLICATE_VIDEO_VERSION || null
-  },
-}));
-
-// POST /magic — RETURNS id (contract preserved)
-app.post("/magic", upload.single("image"), async (req,res)=>{
-  try {
-    if (!mustBeOkReplicate(res)) return;
-
-    const file = req.file;
-    const styleId = String(req.body?.styleId || "").trim();
-    if (!file?.buffer || file.buffer.length < 10) return res.status(400).json({ ok:false, error:"Missing image" });
-
     const id = `m_${crypto.randomUUID()}`;
-    magicJobs.set(id, { status:"processing", createdAt: now() });
-
-    // async job
-    runReplicateImageMagic({ jobId:id, file, styleId });
+    magicJobs.set(id, {
+      status: "processing",
+      predId: pred.id,
+      outputUrl: null,
+      error: null,
+      createdAt: now(),
+    });
 
     return res.status(200).json({ ok:true, id });
   } catch (e) {
@@ -306,30 +265,85 @@ app.post("/magic", upload.single("image"), async (req,res)=>{
   }
 });
 
-// GET /magic/status
-app.get("/magic/status", (req,res)=>{
-  const id = String(req.query?.id || "").trim();
-  if (!id) return res.status(400).json({ ok:false, error:"Missing id" });
+// GET /magic/status — polls Replicate on-demand
+app.get("/magic/status", async (req,res)=>{
+  try {
+    const id = String(req.query?.id || "").trim();
+    if (!id) return res.status(400).json({ ok:false, error:"Missing id" });
 
-  const job = magicJobs.get(id);
-  if (!job) return res.status(200).json({ ok:true, status:"failed", outputUrl:null, error:"Unknown id or expired" });
+    const job = magicJobs.get(id);
+    if (!job) return res.status(200).json({ ok:true, status:"failed", outputUrl:null, error:"Unknown id or expired" });
 
-  const status = job.status || "unknown";
-  const outputUrl = status === "succeeded" ? `${getBaseUrl(req)}/magic/result?id=${encodeURIComponent(id)}` : null;
-  return res.status(200).json({ ok:true, status, outputUrl, error: job.error || null });
+    // If already finished, return quickly
+    if (job.status === "succeeded") {
+      return res.status(200).json({
+        ok:true,
+        status:"succeeded",
+        outputUrl: `${getBaseUrl(req)}/magic/result?id=${encodeURIComponent(id)}`,
+        error: null,
+      });
+    }
+    if (job.status === "failed") {
+      return res.status(200).json({ ok:true, status:"failed", outputUrl:null, error: job.error || "failed" });
+    }
+
+    // Poll replicate for current status
+    const p = await replicateGetPrediction(job.predId);
+    const st = p?.status || "unknown";
+
+    if (st === "succeeded") {
+      const out = normalizeOutputUrl(p?.output);
+      if (!out) {
+        job.status = "failed";
+        job.error = "Replicate succeeded but output is missing";
+      } else {
+        job.status = "succeeded";
+        job.outputUrl = out;
+        job.error = null;
+      }
+      magicJobs.set(id, job);
+    } else if (st === "failed" || st === "canceled") {
+      job.status = "failed";
+      job.error = p?.error || `Replicate image failed (${st})`;
+      magicJobs.set(id, job);
+    } // else still processing
+
+    const outputUrl = job.status === "succeeded"
+      ? `${getBaseUrl(req)}/magic/result?id=${encodeURIComponent(id)}`
+      : null;
+
+    return res.status(200).json({
+      ok:true,
+      status: job.status,
+      outputUrl,
+      error: job.error || null,
+    });
+  } catch (e) {
+    return res.status(500).json({ ok:false, error:String(e?.message || e) });
+  }
 });
 
-// GET /magic/result
-app.get("/magic/result", (req,res)=>{
-  const id = String(req.query?.id || "").trim();
-  if (!id) return res.status(400).send("Missing id");
-  const job = magicJobs.get(id);
-  if (!job) return res.status(404).send("Not found");
-  if (job.status !== "succeeded" || !job.bytes) return res.status(409).send(job.error || "Not ready");
+// GET /magic/result — downloads from Replicate output URL (no heavy caching needed)
+app.get("/magic/result", async (req,res)=>{
+  try {
+    const id = String(req.query?.id || "").trim();
+    if (!id) return res.status(400).send("Missing id");
 
-  res.setHeader("Content-Type", job.mime || "image/png");
-  res.setHeader("Cache-Control", "no-store");
-  return res.status(200).send(job.bytes);
+    const job = magicJobs.get(id);
+    if (!job) return res.status(404).send("Not found");
+    if (job.status !== "succeeded" || !job.outputUrl) return res.status(409).send(job.error || "Not ready");
+
+    const r = await fetch(job.outputUrl);
+    if (!r.ok) return res.status(502).send("Failed to fetch image output");
+    const mime = r.headers.get("content-type") || "image/png";
+    const bytes = Buffer.from(await r.arrayBuffer());
+
+    res.setHeader("Content-Type", mime);
+    res.setHeader("Cache-Control", "no-store");
+    return res.status(200).send(bytes);
+  } catch (e) {
+    return res.status(500).send(String(e?.message || e));
+  }
 });
 
 // POST /video/start (unchanged)
@@ -403,11 +417,11 @@ app.get("/video/status", async (req,res)=>{
   }
 });
 
-// ---------- Crash visibility ----------
+// Crash visibility
 process.on("unhandledRejection", (e) => console.error("unhandledRejection", e));
 process.on("uncaughtException", (e) => console.error("uncaughtException", e));
 
-// ---------- Listen ----------
+// Listen
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`✅ ${VERSION}`);
   console.log(`✅ Listening on 0.0.0.0:${PORT}`);
