@@ -156,20 +156,19 @@ async function toPngBufferMax1024(inputBuf) {
     .toBuffer();
 }
 
-
 async function chooseOpenAIImageSizeFromBuffer(pngBuf) {
-  // OpenAI gpt-image-1 supports rectangular sizes (e.g. 1536x1024 / 1024x1536).
-  // We pick the closest orientation to the input to avoid implicit zoom/crop.
+  // Pick size by input orientation to avoid implicit zoom/crop.
+  // Landscape -> 1536x1024, Portrait -> 1024x1536, Near-square -> 1024x1024
   await loadSharp();
   const meta = await _sharp(pngBuf).metadata();
   const w = Number(meta?.width || 1024);
   const h = Number(meta?.height || 1024);
   const ar = w / Math.max(1, h);
 
-  // thresholds tuned to treat 4:3 as "landscape"
-  if (ar >= 1.15) return "1536x1024";   // landscape
-  if (ar <= 0.87) return "1024x1536";   // portrait
-  return "1024x1024";                    // near-square
+  // Treat ~4:3 as landscape; keep conservative thresholds.
+  if (ar >= 1.15) return "1536x1024";
+  if (ar <= 0.87) return "1024x1536";
+  return "1024x1024";
 }
 
 async function bufferToOpenAIFile(buf, filename, mime) {
@@ -188,9 +187,9 @@ async function fetchBytesFromUrl(url) {
 async function runOpenAIImageMagic({ jobId, file, styleId }) {
   try {
     const client = await getOpenAIClient();
-    const prompt = getStylePrompt(styleId);
+    const basePrompt = getStylePrompt(styleId);
     const framingGuard = "Preserve the entire original drawing within the frame. Do not zoom in, do not crop, and do not cut off edges. Keep the same composition and framing.";
-    const finalPrompt = `${prompt}\n\n${framingGuard}`;
+    const prompt = `${basePrompt}\n\n${framingGuard}`;
 
     // Convert input to PNG and cap max dimension to 1024 (cheaper than raw, but preserves framing better than 512)
     const pngBuf = await toPngBufferMax1024(file.buffer);
@@ -199,7 +198,7 @@ async function runOpenAIImageMagic({ jobId, file, styleId }) {
     const result = await client.images.edit({
       model: OPENAI_IMAGE_MODEL,          // gpt-image-1 or gpt-image-1-mini
       image: openaiImage,
-      prompt: finalPrompt,
+      prompt,
       size: (OPENAI_IMAGE_SIZE === "auto" ? await chooseOpenAIImageSizeFromBuffer(pngBuf) : OPENAI_IMAGE_SIZE),
       quality: OPENAI_IMAGE_QUALITY,      // low|medium|high
       output_format: OPENAI_OUTPUT_FORMAT // png|jpeg|webp
@@ -341,7 +340,7 @@ Loop-friendly. Smooth. Clean.
     const dataUri = bufferToDataUri(file.buffer, file.mimetype);
     const input = {
       [VIDEO_INPUT_KEY]: dataUri,
-      [VIDEO_PROMPT_KEY]: prompt: finalPrompt,
+      [VIDEO_PROMPT_KEY]: prompt,
       resolution: VIDEO_RESOLUTION,
       frames_per_second: VIDEO_FPS,
       num_frames: VIDEO_NUM_FRAMES,
