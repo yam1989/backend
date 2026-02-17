@@ -156,52 +156,20 @@ async function toPngBufferMax1024(inputBuf) {
     .toBuffer();
 }
 
-async function toPngBufferMagicProtected(inputBuf) {
-  await loadSharp();
-
-  // 1) Normalize + keep aspect (no crop), cap to 1024 max dimension for cost control.
-  const basePng = await _sharp(inputBuf)
-    .rotate() // respect EXIF orientation
-    .resize({ width: 1024, height: 1024, fit: "inside", withoutEnlargement: true })
-    .png()
-    .toBuffer();
-
-  // 2) Add "framing protection": blurred extended background + padding.
-  // This reduces the chance the model zoom/crops into the actual drawing.
-  const meta = await _sharp(basePng).metadata();
-  const w = Number(meta?.width || 1024);
-  const h = Number(meta?.height || 1024);
-
-  // ~18% padding of the shorter side (tunable)
-  const pad = Math.max(24, Math.round(Math.min(w, h) * 0.18));
-  const outW = w + pad * 2;
-  const outH = h + pad * 2;
-
-  // Background: cover + blur so it feels premium (and protects edges).
-  const bg = await _sharp(basePng)
-    .resize({ width: outW, height: outH, fit: "cover" })
-    .blur(18)
-    .png()
-    .toBuffer();
-
-  // Composite original centered on top.
-  return await _sharp(bg)
-    .composite([{ input: basePng, left: pad, top: pad }])
-    .png()
-    .toBuffer();
-}
 
 async function chooseOpenAIImageSizeFromBuffer(pngBuf) {
   // Pick output size by input orientation to reduce implicit zoom/crop.
-  // Landscape -> 1536x1024, Portrait -> 1024x1536, Near-square -> 1024x1024
   await loadSharp();
   const meta = await _sharp(pngBuf).metadata();
   const w = Number(meta?.width || 1024);
   const h = Number(meta?.height || 1024);
   const ar = w / Math.max(1, h);
 
+  // Landscape
   if (ar >= 1.15) return "1536x1024";
+  // Portrait
   if (ar <= 0.87) return "1024x1536";
+  // Near-square
   return "1024x1024";
 }
 
@@ -223,19 +191,20 @@ async function runOpenAIImageMagic({ jobId, file, styleId }) {
   try {
     const client = await getOpenAIClient();
     const basePrompt = getStylePrompt(styleId);
-    const framingGuard = "Preserve the entire original drawing within the frame. Do not zoom in, do not crop, and do not cut off edges. Keep the same composition and framing. Do not reframe or recenter. No new objects.";
-    const prompt = `${basePrompt}\n\n${framingGuard}`;
+    const preserve = "CRITICAL: Preserve the exact composition, framing, geometry, and positions of ALL elements from the input drawing. Do NOT zoom in. Do NOT crop. Do NOT cut off edges. Do NOT recompose. Do NOT move objects. Change ONLY colors, shading, and style while keeping the original linework and layout intact.";
+    const prompt = `${basePrompt}\n\n${preserve}`;
 
     // Convert input to PNG and cap max dimension to 1024 (cheaper than raw, but preserves framing better than 512)
-    const pngBuf = await toPngBufferMagicProtected(file.buffer);
+    const pngBuf = await toPngBufferMax1024(file.buffer);
     const openaiImage = await bufferToOpenAIFile(pngBuf, "input.png", "image/png");
 
     const result = await client.images.edit({
       model: OPENAI_IMAGE_MODEL,          // gpt-image-1 or gpt-image-1-mini
       image: openaiImage,
       prompt,
-      size: (OPENAI_IMAGE_SIZE === "auto" ? await chooseOpenAIImageSizeFromBuffer(pngBuf) : OPENAI_IMAGE_SIZE),
+            size: (OPENAI_IMAGE_SIZE === "auto" ? await chooseOpenAIImageSizeFromBuffer(pngBuf) : OPENAI_IMAGE_SIZE),
       quality: OPENAI_IMAGE_QUALITY,      // low|medium|high
+      input_fidelity: (String(OPENAI_IMAGE_MODEL).includes("mini") ? undefined : "high"),
       output_format: OPENAI_OUTPUT_FORMAT // png|jpeg|webp
     });
 
