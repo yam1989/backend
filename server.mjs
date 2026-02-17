@@ -157,42 +157,60 @@ async function toPngBufferMax1024(inputBuf) {
 }
 
 
-async function chooseOpenAIImageSizeFromPng(pngBuf) {
-  // Avoid implicit zoom/crop by matching generation size to input orientation.
+
+async function makeFrameLockedSquare(inputBuf, padScale = 0.78) {
+  // Create a 1024x1024 square where the original image is scaled down and centered.
+  // Even if the model "zooms", it will mostly consume the padding instead of cropping the drawing.
   await loadSharp();
-  const meta = await _sharp(pngBuf).metadata();
+  const meta = await _sharp(inputBuf).metadata();
   const w = Number(meta?.width || 1024);
   const h = Number(meta?.height || 1024);
   const ar = w / Math.max(1, h);
-  if (ar >= 1.15) return "1536x1024"; // landscape
-  if (ar <= 0.87) return "1024x1536"; // portrait
-  return "1024x1024"; // near-square
+
+  const SIZE = 1024;
+  const inner = Math.round(SIZE * padScale);
+
+  const bg = await _sharp(inputBuf)
+    .resize({ width: SIZE, height: SIZE, fit: "cover" })
+    .blur(18)
+    .modulate({ brightness: 1.02, saturation: 1.02 })
+    .png()
+    .toBuffer();
+
+  const fg = await _sharp(inputBuf)
+    .resize({ width: inner, height: inner, fit: "inside", withoutEnlargement: true })
+    .png()
+    .toBuffer();
+
+  const out = await _sharp(bg)
+    .composite([{ input: fg, gravity: "center" }])
+    .png()
+    .toBuffer();
+
+  return { squareBuf: out, aspect: ar };
 }
 
-async function makeProtectedBorderMaskFromPng(pngBuf, protectPct = 0.14) {
-  // Create a mask where the OUTER border is protected (black), and only the inner area is editable (white).
-  // This anchors framing: edges can't be "redrawn away", so the model is far less likely to recompose/crop.
+async function cropSquareToAspect(squareBuf, aspect) {
+  // Crop the 1024x1024 result back to the original aspect ratio (center crop).
   await loadSharp();
-  const meta = await _sharp(pngBuf).metadata();
-  const w = Number(meta?.width || 1024);
-  const h = Number(meta?.height || 1024);
-  const inset = Math.max(8, Math.round(Math.min(w, h) * protectPct));
-
-  const outer = await _sharp({
-    create: { width: w, height: h, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 1 } }
-  }).png().toBuffer();
-
-  const innerW = Math.max(1, w - inset * 2);
-  const innerH = Math.max(1, h - inset * 2);
-  const inner = await _sharp({
-    create: { width: innerW, height: innerH, channels: 4, background: { r: 255, g: 255, b: 255, alpha: 1 } }
-  }).png().toBuffer();
-
-  return await _sharp(outer)
-    .composite([{ input: inner, left: inset, top: inset }])
+  const SIZE = 1024;
+  const ar = Number(aspect || 1);
+  let outW = SIZE, outH = SIZE;
+  if (ar >= 1.0) {
+    outW = SIZE;
+    outH = Math.max(1, Math.round(SIZE / ar));
+  } else {
+    outH = SIZE;
+    outW = Math.max(1, Math.round(SIZE * ar));
+  }
+  const left = Math.max(0, Math.floor((SIZE - outW) / 2));
+  const top = Math.max(0, Math.floor((SIZE - outH) / 2));
+  return await _sharp(squareBuf)
+    .extract({ left, top, width: outW, height: outH })
     .png()
     .toBuffer();
 }
+
 
 async function bufferToOpenAIFile(buf, filename, mime) {
   await loadOpenAI();
@@ -210,25 +228,28 @@ async function fetchBytesFromUrl(url) {
 async function runOpenAIImageMagic({ jobId, file, styleId }) {
   try {
     const client = await getOpenAIClient();
-    const basePrompt = getStylePrompt(styleId);
-    const framingGuard = "IMPORTANT: Preserve the entire original drawing and framing. Keep EVERY object in the same position and size. Do NOT zoom in, do NOT crop, do NOT reframe, do NOT move objects. Only add color, shading, and premium style on top of what is already drawn.";
-    const prompt = `${basePrompt}\n\n${framingGuard}`;
 
-    // Convert input to PNG and cap max dimension to 1024 (cheaper than raw, but preserves framing better than 512)
+    const basePrompt = getStylePrompt(styleId);
+    const guard =
+      "CRITICAL: Keep the exact original composition and framing. Do NOT zoom in. Do NOT crop. Do NOT recompose. " +
+      "Do NOT move objects. Preserve all edges of the drawing. Only apply the chosen premium colorful style on top of the same image.";
+
+    // Convert input to PNG, then build a frame-locked 1024x1024 square with padding.
+    // This keeps cost stable (~5–7¢) and prevents the model from cutting off content.
     const pngBuf = await toPngBufferMax1024(file.buffer);
-    const openaiImage = await bufferToOpenAIFile(pngBuf, "input.png", "image/png");
-    const maskBuf = await makeProtectedBorderMaskFromPng(pngBuf, 0.16);
-    const openaiMask = await bufferToOpenAIFile(maskBuf, "mask.png", "image/png");
-    const resolvedSize = (OPENAI_IMAGE_SIZE === "auto") ? await chooseOpenAIImageSizeFromPng(pngBuf) : OPENAI_IMAGE_SIZE;
+    const { squareBuf, aspect } = await makeFrameLockedSquare(pngBuf, 0.78);
+    const openaiImage = await bufferToOpenAIFile(squareBuf, "input.png", "image/png");
 
     const result = await client.images.edit({
-      model: OPENAI_IMAGE_MODEL,          // gpt-image-1 or gpt-image-1-mini
+      model: OPENAI_IMAGE_MODEL,
       image: openaiImage,
-      mask: openaiMask,
-      prompt,
-      size: resolvedSize,
-      quality: OPENAI_IMAGE_QUALITY,      // low|medium|high
-      output_format: OPENAI_OUTPUT_FORMAT // png|jpeg|webp
+      prompt: `${basePrompt}
+
+${guard}`,
+      // Force cheap stable size (do not let "auto" pick larger sizes).
+      size: "1024x1024",
+      quality: OPENAI_IMAGE_QUALITY,
+      output_format: OPENAI_OUTPUT_FORMAT
     });
 
     const item = result?.data?.[0];
@@ -239,14 +260,21 @@ async function runOpenAIImageMagic({ jobId, file, styleId }) {
     if (!bytes || !bytes.length) throw new Error("OpenAI returned no image data (missing b64_json and url)");
     if (bytes.length > MAGIC_MAX_BYTES) throw new Error(`Image too large (${bytes.length} bytes)`);
 
-    const mime =
-      OPENAI_OUTPUT_FORMAT === "jpeg" ? "image/jpeg" :
-      OPENAI_OUTPUT_FORMAT === "webp" ? "image/webp" :
-      "image/png";
+    // Crop back to original aspect ratio (center crop will remove only padding, not the drawing).
+    const finalPng = await cropSquareToAspect(bytes, aspect);
 
-    magicJobs.set(jobId, { status:"succeeded", mime, bytes, error:null, createdAt: now() });
-  } catch (e) {
-    magicJobs.set(jobId, { status:"failed", mime:null, bytes:null, error:String(e?.message || e), createdAt: now() });
+    const outPath = path.join(JOBS_DIR, `${jobId}.png`);
+    await fs.promises.writeFile(outPath, finalPng);
+
+    jobs.set(jobId, {
+      status: "done",
+      kind: "image",
+      outputUrl: `${PUBLIC_BASE_URL}/magic/result?id=${jobId}`,
+      bytes: finalPng.length
+    });
+  } catch (err) {
+    console.error("[magic] error:", err);
+    jobs.set(jobId, { status: "error", error: String(err?.message || err) });
   }
 }
 
