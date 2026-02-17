@@ -11,7 +11,7 @@ import express from "express";
 import multer from "multer";
 import crypto from "crypto";
 
-const VERSION = "server.mjs DM-2026 STARTUP_FIXED v1.0 (openai+replicate img, replicate video)";
+const VERSION = "server.mjs DM-2026 STARTUP_FIXED v1.1 (debug version id) (openai+replicate img, replicate video)";
 const app = express();
 app.disable("x-powered-by");
 
@@ -97,6 +97,14 @@ function normalizeOutputUrl(output) {
   return null;
 }
 
+
+function isValidVersionId(v) {
+  const s = (v || "").toString().trim();
+  return /^[a-f0-9]{64}$/i.test(s);
+}
+function cleanedVersionId(v) {
+  return (v || "").toString().trim();
+}
 function bufferToDataUri(buf, mime) {
   const safeMime = mime && mime.includes("/") ? mime : "image/png";
   return `data:${safeMime};base64,${Buffer.from(buf).toString("base64")}`;
@@ -244,7 +252,17 @@ async function runOpenAIImageMagic({ jobId, file, styleId }) {
 
 // ---------- Replicate API helpers ----------
 async function replicateCreatePrediction({ owner, model, version, input }) {
-  const body = version ? { version, input } : { model: `${owner}/${model}`, input };
+  const ver = cleanedVersionId(version);
+  if (ver) {
+    if (!isValidVersionId(ver)) {
+      throw new Error(`Invalid REPLICATE_IMAGE_VERSION (must be 64 hex chars). Got: "${ver}"`);
+    }
+    const body = { version: ver, input };
+    return await replicateFetchCreate(body);
+  }
+  const body = { model: `${owner}/${model}`, input };
+  return await replicateFetchCreate(body);
+}
   const r = await fetch("https://api.replicate.com/v1/predictions", {
     method: "POST",
     headers: { Authorization: `Token ${REPLICATE_API_TOKEN}`, "Content-Type": "application/json" },
@@ -333,7 +351,7 @@ app.get("/me", (_req, res) =>
     image: {
       provider: IMAGE_PROVIDER,
       openai: { model: OPENAI_IMAGE_MODEL, size: OPENAI_IMAGE_SIZE, quality: OPENAI_IMAGE_QUALITY, output_format: OPENAI_OUTPUT_FORMAT, key: Boolean(OPENAI_API_KEY) },
-      replicate: { owner: REPLICATE_IMAGE_OWNER, model: REPLICATE_IMAGE_MODEL, versionPinned: Boolean(REPLICATE_IMAGE_VERSION), prompt_strength: SD_PROMPT_STRENGTH, steps: SD_STEPS, key: Boolean(REPLICATE_API_TOKEN) },
+      replicate: { owner: REPLICATE_IMAGE_OWNER, model: REPLICATE_IMAGE_MODEL, versionPinned: Boolean(REPLICATE_IMAGE_VERSION), versionId: cleanedVersionId(REPLICATE_IMAGE_VERSION) || null, prompt_strength: SD_PROMPT_STRENGTH, steps: SD_STEPS, key: Boolean(REPLICATE_API_TOKEN) },
     },
     video: { provider: "replicate", owner: REPLICATE_VIDEO_OWNER, model: REPLICATE_VIDEO_MODEL, versionPinned: Boolean(REPLICATE_VIDEO_VERSION) },
   })
@@ -474,5 +492,6 @@ process.on("uncaughtException", (err) => console.error("uncaughtException:", err
 
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`✅ DM-2026 backend listening on http://0.0.0.0:${PORT}`);
+  console.log(`🧩 IMAGE_PROVIDER=${IMAGE_PROVIDER} | SDXL version=${cleanedVersionId(REPLICATE_IMAGE_VERSION) || "none"}`);
   console.log(`VERSION: ${VERSION}`);
 });
