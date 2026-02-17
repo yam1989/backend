@@ -1,24 +1,19 @@
 // DM-2026 backend — Cloud Run (Node 20 + Express)
-// ✅ Endpoints FIXED (do not change): /, /health, /me, /magic, /magic/status, /magic/result, /video/start, /video/status
+// ✅ Endpoints FIXED: /, /health, /me, /magic, /magic/status, /magic/result, /video/start, /video/status
 //
-// Image Mode v2.4 (Structure-Lock Stylizer) — tuned for:
-//   ✅ correct framing (no crop) via padding contain
-//   ✅ faster default (less steps)
-//   ✅ stronger stylization (so it won't return "same image")
+// Image Mode v2.5 (Structure-Lock Stylizer) — FIXED input schema for fermatresearch/sdxl-controlnet-lora:
+//   - Uses prompt_strength (NOT strength) per Replicate schema
+//   - condition_scale clamped to <= 1 (per schema max 1)
+//   - Cloud Run safe: /magic creates prediction, /magic/status polls Replicate on-demand
+//   - /magic/status also returns rawOutputUrl for debugging (app can ignore)
 //
-// Key idea:
-// - Cloud Run safe: NO background polling. /magic/status polls Replicate on-demand.
-// - ControlNet keeps contours; "strength" controls how much re-render happens.
-//   If strength too low -> looks like original. We'll raise default a bit.
-// - If you want even faster: reduce SD_STEPS and/or set SD_PAD_SIZE to 768.
-//
-// Video Mode: Replicate wan-2.2-i2v-fast (unchanged)
+// Video Mode: unchanged.
 
 import express from "express";
 import multer from "multer";
 import crypto from "crypto";
 
-const VERSION = "server.mjs DM-2026 IMAGE v2.4 (faster+more style, no-background-polling) + replicate video";
+const VERSION = "server.mjs DM-2026 IMAGE v2.5 (prompt_strength fix + debug raw url)";
 
 const app = express();
 app.disable("x-powered-by");
@@ -28,16 +23,21 @@ const PORT = Number(process.env.PORT || 8080);
 // ===== REPLICATE =====
 const REPLICATE_API_TOKEN = process.env.REPLICATE_API_TOKEN || "";
 
-// Image version (required by this model)
+// Image version (required)
 const DEFAULT_IMAGE_VERSION = "3bb13fe1c33c35987b33792b01b71ed6529d03f165d1c2416375859f09ca9fef";
 const REPLICATE_IMAGE_VERSION = (process.env.REPLICATE_IMAGE_VERSION || DEFAULT_IMAGE_VERSION).trim();
 
-// ===== IMAGE TUNING =====
-// Faster default than before:
-const SD_STEPS = Number(process.env.SD_STEPS || 14);              // was ~20-22
+// ===== IMAGE TUNING (schema-aligned) =====
+const SD_STEPS = Number(process.env.SD_STEPS || 14);
 const SD_GUIDANCE_SCALE = Number(process.env.SD_GUIDANCE_SCALE || 7.0);
-const SD_STRENGTH = Number(process.env.SD_PROMPT_STRENGTH || 0.40); // was ~0.30 (too identity)
-const SD_CONDITION_SCALE = Number(process.env.SD_CONDITION_SCALE || 0.90); // strong structure lock
+
+// IMPORTANT: This model uses prompt_strength for img2img denoise (0..1).
+// Too low -> returns original. Too high -> destroys structure.
+// We'll default to 0.45 to ensure visible premium rendering.
+const SD_PROMPT_STRENGTH = Number(process.env.SD_PROMPT_STRENGTH || 0.45);
+
+// condition_scale max is 1 for this model version schema.
+const SD_CONDITION_SCALE = Number(process.env.SD_CONDITION_SCALE || 0.9);
 
 const SD_NEGATIVE_PROMPT =
   process.env.SD_NEGATIVE_PROMPT ||
@@ -45,7 +45,7 @@ const SD_NEGATIVE_PROMPT =
   "new objects, extra objects, extra characters, background replacement, text, watermark, logo, " +
   "distorted, deformed, changed proportions, clutter, messy";
 
-// Padding (NO crop). You can set SD_PAD_SIZE=768 to speed up further (cheaper/faster).
+// Padding (NO crop)
 const PAD_SIZE = Number(process.env.SD_PAD_SIZE || 1024);
 const PAD_BACKGROUND = (process.env.SD_PAD_BACKGROUND || "#ffffff").trim();
 
@@ -73,7 +73,7 @@ const upload = multer({
 
 // ===== In-memory jobs =====
 const MAGIC_TTL_MS = Number(process.env.MAGIC_TTL_MS || 60 * 60 * 1000);
-const magicJobs = new Map(); // id -> {status, predId, outputUrl, error, createdAt}
+const magicJobs = new Map(); // id -> {status, predId, rawOutputUrl, error, createdAt}
 
 function now() { return Date.now(); }
 
@@ -125,7 +125,7 @@ function getStylePrompt(styleId) {
     "Do NOT add any new objects. Do NOT remove objects. " +
     "Do NOT change framing or camera. Do NOT crop. Do NOT zoom. " +
     "Premium smooth coloring, gentle gradients, soft global illumination, subtle shadows, clean edges. " +
-    "Slightly enhance colors and lighting while keeping structure locked. " +
+    "Make it look like a premium kids app render, but keep structure locked. " +
     "No paper texture, no scan artifacts, no noise.";
 
   let extra = "";
@@ -163,7 +163,7 @@ async function replicateCreatePredictionVersionOnly({ version, input }) {
   const r = await fetch("https://api.replicate.com/v1/predictions", {
     method:"POST",
     headers:{ Authorization:`Token ${REPLICATE_API_TOKEN}`, "Content-Type":"application/json" },
-    body: JSON.stringify({ version, input }), // IMPORTANT: model not allowed
+    body: JSON.stringify({ version, input }),
   });
   const json = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(json?.detail || json?.error || r.statusText || "Replicate error");
@@ -209,7 +209,7 @@ app.get("/me", (_req,res)=>res.status(200).json({
       version: REPLICATE_IMAGE_VERSION || null,
       steps: SD_STEPS,
       guidance_scale: SD_GUIDANCE_SCALE,
-      strength: SD_STRENGTH,
+      prompt_strength: SD_PROMPT_STRENGTH,
       condition_scale: SD_CONDITION_SCALE,
       pad_size: PAD_SIZE,
       key: Boolean(REPLICATE_API_TOKEN),
@@ -218,7 +218,7 @@ app.get("/me", (_req,res)=>res.status(200).json({
   video: { provider:"replicate", owner: REPLICATE_VIDEO_OWNER, model: REPLICATE_VIDEO_MODEL, version: REPLICATE_VIDEO_VERSION || null },
 }));
 
-// POST /magic — returns {id} immediately (Cloud Run safe)
+// POST /magic — create prediction, return id
 app.post("/magic", upload.single("image"), async (req,res)=>{
   try {
     if (!mustBeOkReplicate(res)) return;
@@ -227,22 +227,20 @@ app.post("/magic", upload.single("image"), async (req,res)=>{
     const styleId = String(req.body?.styleId || "").trim();
     if (!file?.buffer || file.buffer.length < 10) return res.status(400).json({ ok:false, error:"Missing image" });
 
-    // preprocess: pad to square WITHOUT CROP
     const lockedPng = await padSquarePng(file.buffer, PAD_SIZE, PAD_BACKGROUND);
     const image = bufferToDataUri(lockedPng, "image/png");
 
     const prompt = getStylePrompt(styleId);
 
-    // Create prediction (fast request)
+    // ✅ Schema for fermatresearch/sdxl-controlnet-lora uses prompt_strength + condition_scale
     const input = {
       prompt,
       negative_prompt: SD_NEGATIVE_PROMPT,
       image,
-      img2img: true,
-      strength: Math.max(0.10, Math.min(0.65, SD_STRENGTH)),
-      condition_scale: Math.max(0.5, Math.min(2, SD_CONDITION_SCALE)),
+      prompt_strength: Math.max(0.10, Math.min(0.80, SD_PROMPT_STRENGTH)),
+      condition_scale: Math.max(0.0, Math.min(1.0, SD_CONDITION_SCALE)),
       guidance_scale: Math.max(1, Math.min(12, SD_GUIDANCE_SCALE)),
-      num_inference_steps: Math.max(8, Math.min(60, SD_STEPS)),
+      num_inference_steps: Math.max(6, Math.min(60, SD_STEPS)),
       num_outputs: 1,
       apply_watermark: false,
       refine: "no_refiner",
@@ -257,7 +255,7 @@ app.post("/magic", upload.single("image"), async (req,res)=>{
     magicJobs.set(id, {
       status: "processing",
       predId: pred.id,
-      outputUrl: null,
+      rawOutputUrl: null,
       error: null,
       createdAt: now(),
     });
@@ -268,7 +266,7 @@ app.post("/magic", upload.single("image"), async (req,res)=>{
   }
 });
 
-// GET /magic/status — polls Replicate on-demand
+// GET /magic/status — polls replicate
 app.get("/magic/status", async (req,res)=>{
   try {
     const id = String(req.query?.id || "").trim();
@@ -282,11 +280,12 @@ app.get("/magic/status", async (req,res)=>{
         ok:true,
         status:"succeeded",
         outputUrl: `${getBaseUrl(req)}/magic/result?id=${encodeURIComponent(id)}`,
+        rawOutputUrl: job.rawOutputUrl || null,
         error: null,
       });
     }
     if (job.status === "failed") {
-      return res.status(200).json({ ok:true, status:"failed", outputUrl:null, error: job.error || "failed" });
+      return res.status(200).json({ ok:true, status:"failed", outputUrl:null, rawOutputUrl:null, error: job.error || "failed" });
     }
 
     const p = await replicateGetPrediction(job.predId);
@@ -299,7 +298,7 @@ app.get("/magic/status", async (req,res)=>{
         job.error = "Replicate succeeded but output is missing";
       } else {
         job.status = "succeeded";
-        job.outputUrl = out;
+        job.rawOutputUrl = out;
         job.error = null;
       }
       magicJobs.set(id, job);
@@ -313,13 +312,19 @@ app.get("/magic/status", async (req,res)=>{
       ? `${getBaseUrl(req)}/magic/result?id=${encodeURIComponent(id)}`
       : null;
 
-    return res.status(200).json({ ok:true, status: job.status, outputUrl, error: job.error || null });
+    return res.status(200).json({
+      ok:true,
+      status: job.status,
+      outputUrl,
+      rawOutputUrl: job.rawOutputUrl || null,
+      error: job.error || null,
+    });
   } catch (e) {
     return res.status(500).json({ ok:false, error:String(e?.message || e) });
   }
 });
 
-// GET /magic/result — fetches from Replicate output URL
+// GET /magic/result — fetch replicate output
 app.get("/magic/result", async (req,res)=>{
   try {
     const id = String(req.query?.id || "").trim();
@@ -327,9 +332,9 @@ app.get("/magic/result", async (req,res)=>{
 
     const job = magicJobs.get(id);
     if (!job) return res.status(404).send("Not found");
-    if (job.status !== "succeeded" || !job.outputUrl) return res.status(409).send(job.error || "Not ready");
+    if (job.status !== "succeeded" || !job.rawOutputUrl) return res.status(409).send(job.error || "Not ready");
 
-    const r = await fetch(job.outputUrl);
+    const r = await fetch(job.rawOutputUrl);
     if (!r.ok) return res.status(502).send("Failed to fetch image output");
     const mime = r.headers.get("content-type") || "image/png";
     const bytes = Buffer.from(await r.arrayBuffer());
@@ -412,6 +417,6 @@ process.on("uncaughtException", (e) => console.error("uncaughtException", e));
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`✅ ${VERSION}`);
   console.log(`✅ Listening on 0.0.0.0:${PORT}`);
-  console.log(`✅ IMAGE (version-only): ${REPLICATE_IMAGE_VERSION}`);
-  console.log(`✅ DEFAULTS: PAD_SIZE=${PAD_SIZE} STEPS=${SD_STEPS} STRENGTH=${SD_STRENGTH} CONDITION=${SD_CONDITION_SCALE}`);
+  console.log(`✅ IMAGE version-only: ${REPLICATE_IMAGE_VERSION}`);
+  console.log(`✅ Defaults: PAD_SIZE=${PAD_SIZE} STEPS=${SD_STEPS} PROMPT_STRENGTH=${SD_PROMPT_STRENGTH} CONDITION_SCALE=${SD_CONDITION_SCALE}`);
 });
