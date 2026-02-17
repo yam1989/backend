@@ -14,6 +14,8 @@ import express from "express";
 import multer from "multer";
 import crypto from "crypto";
 
+const VERSION = "server.mjs DM-2026 SD+OpenAI v1.0";
+
 const app = express();
 app.disable("x-powered-by");
 const PORT = parseInt(process.env.PORT || "8080", 10);
@@ -362,6 +364,7 @@ app.get("/health", (_req,res)=>res.status(200).json({
 }));
 
 app.get("/me", (_req,res)=>res.status(200).json({
+  version: VERSION,
   ok:true,
   image:{ provider: IMAGE_PROVIDER, openai:{ model:OPENAI_IMAGE_MODEL, size:OPENAI_IMAGE_SIZE, quality: OPENAI_IMAGE_QUALITY, output_format: OPENAI_OUTPUT_FORMAT }, replicate:{ owner:REPLICATE_IMAGE_OWNER, model:REPLICATE_IMAGE_MODEL, versionPinned:Boolean(REPLICATE_IMAGE_VERSION), prompt_strength: SD_PROMPT_STRENGTH, steps: SD_STEPS } },
   video:{ provider:"replicate", owner:REPLICATE_VIDEO_OWNER, model:REPLICATE_VIDEO_MODEL, versionPinned:Boolean(REPLICATE_VIDEO_VERSION) },
