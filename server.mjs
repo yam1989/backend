@@ -25,6 +25,19 @@ const OPENAI_IMAGE_SIZE = process.env.OPENAI_IMAGE_SIZE || "1024x1024"; // keep 
 const OPENAI_IMAGE_QUALITY = process.env.OPENAI_IMAGE_QUALITY || "medium"; // low|medium|high
 const OPENAI_OUTPUT_FORMAT = process.env.OPENAI_OUTPUT_FORMAT || "png"; // png|jpeg|webp
 
+
+// Image provider for /magic: "openai" (default) or "replicate"
+const IMAGE_PROVIDER = (process.env.IMAGE_PROVIDER || "openai").toLowerCase();
+
+// Replicate (Image) — Stable Diffusion / SDXL (cheap, preserves composition with low strength)
+const REPLICATE_IMAGE_OWNER = process.env.REPLICATE_IMAGE_OWNER || "stability-ai";
+const REPLICATE_IMAGE_MODEL = process.env.REPLICATE_IMAGE_MODEL || "sdxl";
+const REPLICATE_IMAGE_VERSION = process.env.REPLICATE_IMAGE_VERSION || ""; // optional pinned version
+const SD_PROMPT_STRENGTH = parseFloat(process.env.SD_PROMPT_STRENGTH || "0.38"); // 0.25–0.5
+const SD_GUIDANCE_SCALE = parseFloat(process.env.SD_GUIDANCE_SCALE || "7");
+const SD_STEPS = parseInt(process.env.SD_STEPS || "20", 10);
+const SD_NEGATIVE_PROMPT = process.env.SD_NEGATIVE_PROMPT || "blurry, low quality, distorted, extra objects, text, watermark, logo";
+const SD_FRAMELOCK_SCALE = parseFloat(process.env.SD_FRAMELOCK_SCALE || "0.84"); // 0.75–0.9 (lower => more padding)
 const REPLICATE_API_TOKEN = process.env.REPLICATE_API_TOKEN || "";
 const REPLICATE_VIDEO_OWNER = process.env.REPLICATE_VIDEO_OWNER || "wan-video";
 const REPLICATE_VIDEO_MODEL = process.env.REPLICATE_VIDEO_MODEL || "wan-2.2-i2v-fast";
@@ -65,6 +78,16 @@ function mustBeOkOpenAI(res) {
   if (!OPENAI_API_KEY) { res.status(500).json({ ok:false, error:"OPENAI_API_KEY is not set" }); return false; }
   return true;
 }
+
+
+function mustBeOkReplicate(res) {
+  if (!REPLICATE_API_TOKEN) {
+    res.status(500).json({ ok:false, error:"Missing REPLICATE_API_TOKEN" });
+    return false;
+  }
+  return true;
+}
+
 function mustBeOkReplicate(res) {
   if (!REPLICATE_API_TOKEN) { res.status(500).json({ ok:false, error:"REPLICATE_API_TOKEN is not set" }); return false; }
   return true;
@@ -157,60 +180,44 @@ async function toPngBufferMax1024(inputBuf) {
 }
 
 
-
-async function makeFrameLockedSquare(inputBuf, padScale = 0.78) {
-  // Create a 1024x1024 square where the original image is scaled down and centered.
-  // Even if the model "zooms", it will mostly consume the padding instead of cropping the drawing.
+async function makeFrameLockedSquare1024(pngBuf, scale=0.84) {
+  // Returns a 1024x1024 PNG that contains the original image (contain) over a blurred background.
+  // This dramatically reduces "zoom/crop" tendencies in generative models.
   await loadSharp();
-  const meta = await _sharp(inputBuf).metadata();
+  const base = _sharp(pngBuf);
+  const meta = await base.metadata();
   const w = Number(meta?.width || 1024);
   const h = Number(meta?.height || 1024);
-  const ar = w / Math.max(1, h);
 
-  const SIZE = 1024;
-  const inner = Math.round(SIZE * padScale);
+  // Foreground: contain to a smaller box (scale of 1024)
+  const fgSize = Math.max(256, Math.round(1024 * Math.min(0.95, Math.max(0.55, scale))));
+  const fg = await _sharp(pngBuf)
+    .resize({ width: fgSize, height: fgSize, fit: "inside", withoutEnlargement: true })
+    .png()
+    .toBuffer();
 
-  const bg = await _sharp(inputBuf)
-    .resize({ width: SIZE, height: SIZE, fit: "cover" })
+  // Background: cover 1024 + blur
+  const bg = await _sharp(pngBuf)
+    .resize({ width: 1024, height: 1024, fit: "cover" })
     .blur(18)
-    .modulate({ brightness: 1.02, saturation: 1.02 })
+    .modulate({ brightness: 1.05, saturation: 1.05 })
     .png()
     .toBuffer();
 
-  const fg = await _sharp(inputBuf)
-    .resize({ width: inner, height: inner, fit: "inside", withoutEnlargement: true })
-    .png()
-    .toBuffer();
-
+  // Center composite
+  const left = Math.round((1024 - Math.min(1024, Math.round((w/h) >= 1 ? fgSize : fgSize))) / 2);
+  // We'll use composite gravity center, so left/top not needed.
   const out = await _sharp(bg)
     .composite([{ input: fg, gravity: "center" }])
     .png()
     .toBuffer();
 
-  return { squareBuf: out, aspect: ar };
+  return out;
 }
 
-async function cropSquareToAspect(squareBuf, aspect) {
-  // Crop the 1024x1024 result back to the original aspect ratio (center crop).
-  await loadSharp();
-  const SIZE = 1024;
-  const ar = Number(aspect || 1);
-  let outW = SIZE, outH = SIZE;
-  if (ar >= 1.0) {
-    outW = SIZE;
-    outH = Math.max(1, Math.round(SIZE / ar));
-  } else {
-    outH = SIZE;
-    outW = Math.max(1, Math.round(SIZE * ar));
-  }
-  const left = Math.max(0, Math.floor((SIZE - outW) / 2));
-  const top = Math.max(0, Math.floor((SIZE - outH) / 2));
-  return await _sharp(squareBuf)
-    .extract({ left, top, width: outW, height: outH })
-    .png()
-    .toBuffer();
+function bufferToDataUriPng(buf) {
+  return `data:image/png;base64,${Buffer.from(buf).toString("base64")}`;
 }
-
 
 async function bufferToOpenAIFile(buf, filename, mime) {
   await loadOpenAI();
@@ -228,28 +235,19 @@ async function fetchBytesFromUrl(url) {
 async function runOpenAIImageMagic({ jobId, file, styleId }) {
   try {
     const client = await getOpenAIClient();
+    const prompt = getStylePrompt(styleId);
 
-    const basePrompt = getStylePrompt(styleId);
-    const guard =
-      "CRITICAL: Keep the exact original composition and framing. Do NOT zoom in. Do NOT crop. Do NOT recompose. " +
-      "Do NOT move objects. Preserve all edges of the drawing. Only apply the chosen premium colorful style on top of the same image.";
-
-    // Convert input to PNG, then build a frame-locked 1024x1024 square with padding.
-    // This keeps cost stable (~5–7¢) and prevents the model from cutting off content.
+    // Convert input to PNG and cap max dimension to 1024 (cheaper than raw, but preserves framing better than 512)
     const pngBuf = await toPngBufferMax1024(file.buffer);
-    const { squareBuf, aspect } = await makeFrameLockedSquare(pngBuf, 0.78);
-    const openaiImage = await bufferToOpenAIFile(squareBuf, "input.png", "image/png");
+    const openaiImage = await bufferToOpenAIFile(pngBuf, "input.png", "image/png");
 
     const result = await client.images.edit({
-      model: OPENAI_IMAGE_MODEL,
+      model: OPENAI_IMAGE_MODEL,          // gpt-image-1 or gpt-image-1-mini
       image: openaiImage,
-      prompt: `${basePrompt}
-
-${guard}`,
-      // Force cheap stable size (do not let "auto" pick larger sizes).
-      size: "1024x1024",
-      quality: OPENAI_IMAGE_QUALITY,
-      output_format: OPENAI_OUTPUT_FORMAT
+      prompt,
+      size: OPENAI_IMAGE_SIZE,            // keep 1024x1024 for stable framing
+      quality: OPENAI_IMAGE_QUALITY,      // low|medium|high
+      output_format: OPENAI_OUTPUT_FORMAT // png|jpeg|webp
     });
 
     const item = result?.data?.[0];
@@ -260,23 +258,77 @@ ${guard}`,
     if (!bytes || !bytes.length) throw new Error("OpenAI returned no image data (missing b64_json and url)");
     if (bytes.length > MAGIC_MAX_BYTES) throw new Error(`Image too large (${bytes.length} bytes)`);
 
-    // Crop back to original aspect ratio (center crop will remove only padding, not the drawing).
-    const finalPng = await cropSquareToAspect(bytes, aspect);
+    const mime =
+      OPENAI_OUTPUT_FORMAT === "jpeg" ? "image/jpeg" :
+      OPENAI_OUTPUT_FORMAT === "webp" ? "image/webp" :
+      "image/png";
 
-    const outPath = path.join(JOBS_DIR, `${jobId}.png`);
-    await fs.promises.writeFile(outPath, finalPng);
-
-    magicJobs.set(jobId, {
-      status: "succeeded",
-      bytes: finalPng,
-      mime: "image/png",
-      bytesLength: finalPng.length,
-      doneAt: now()
-    });
-} catch (err) {
-    console.error("[magic] error:", err);
-    magicJobs.set(jobId, { status: "failed", error: String(err?.message || err), doneAt: now() });
+    magicJobs.set(jobId, { status:"succeeded", mime, bytes, error:null, createdAt: now() });
+  } catch (e) {
+    magicJobs.set(jobId, { status:"failed", mime:null, bytes:null, error:String(e?.message || e), createdAt: now() });
+  }
 }
+
+
+async function runReplicateImageMagic({ jobId, file, styleId }) {
+  try {
+    if (!REPLICATE_API_TOKEN) throw new Error("Missing REPLICATE_API_TOKEN");
+
+    const promptBase = getStylePrompt(styleId);
+    const framingGuard = "Preserve the full original drawing and composition. Do NOT zoom in. Do NOT crop. Do NOT move objects. Do NOT add new objects.";
+    const prompt = `${promptBase}\n\n${framingGuard}`;
+
+    // Convert input to PNG max 1024, then frame-lock into 1024x1024 square to prevent crop/zoom.
+    const pngBuf = await toPngBufferMax1024(file.buffer);
+    const locked = await makeFrameLockedSquare1024(pngBuf, SD_FRAMELOCK_SCALE);
+    const image = bufferToDataUriPng(locked);
+
+    const input = {
+      prompt,
+      negative_prompt: SD_NEGATIVE_PROMPT,
+      image,
+      prompt_strength: SD_PROMPT_STRENGTH,
+      guidance_scale: SD_GUIDANCE_SCALE,
+      num_inference_steps: SD_STEPS,
+      width: 1024,
+      height: 1024,
+      num_outputs: 1
+    };
+
+    const pred = await replicateCreatePrediction({
+      owner: REPLICATE_IMAGE_OWNER,
+      model: REPLICATE_IMAGE_MODEL,
+      version: REPLICATE_IMAGE_VERSION || undefined,
+      input
+    });
+
+    // Poll Replicate until done
+    let cur = pred;
+    const t0 = Date.now();
+    while (true) {
+      const status = cur?.status;
+      if (status === "succeeded") break;
+      if (status === "failed" || status === "canceled") {
+        throw new Error(cur?.error || `Replicate image failed (${status})`);
+      }
+      if (Date.now() - t0 > 120_000) throw new Error("Replicate image timeout");
+      await sleep(900);
+      cur = await replicateGetPrediction(cur.id);
+    }
+
+    // Output is usually a URL or array of URLs
+    const outUrl = Array.isArray(cur?.output) ? cur.output[0] : cur?.output;
+    if (!outUrl || typeof outUrl !== "string") throw new Error("Replicate image: missing output URL");
+
+    const r = await fetch(outUrl);
+    if (!r.ok) throw new Error(`Failed to download image output (${r.status})`);
+    const mime = r.headers.get("content-type") || "image/png";
+    const bytes = Buffer.from(await r.arrayBuffer());
+
+    magicJobs.set(jobId, { status:"succeeded", mime, bytes, error:null, createdAt: now() });
+  } catch (e) {
+    magicJobs.set(jobId, { status:"failed", mime:null, bytes:null, error:String(e?.message || e), createdAt: now() });
+  }
 }
 
 // ---------- Replicate API (Video) ----------
@@ -311,21 +363,30 @@ app.get("/health", (_req,res)=>res.status(200).json({
 
 app.get("/me", (_req,res)=>res.status(200).json({
   ok:true,
-  image:{ provider:"openai", model:OPENAI_IMAGE_MODEL, size:OPENAI_IMAGE_SIZE, quality: OPENAI_IMAGE_QUALITY, output_format: OPENAI_OUTPUT_FORMAT },
+  image:{ provider: IMAGE_PROVIDER, openai:{ model:OPENAI_IMAGE_MODEL, size:OPENAI_IMAGE_SIZE, quality: OPENAI_IMAGE_QUALITY, output_format: OPENAI_OUTPUT_FORMAT }, replicate:{ owner:REPLICATE_IMAGE_OWNER, model:REPLICATE_IMAGE_MODEL, versionPinned:Boolean(REPLICATE_IMAGE_VERSION), prompt_strength: SD_PROMPT_STRENGTH, steps: SD_STEPS } },
   video:{ provider:"replicate", owner:REPLICATE_VIDEO_OWNER, model:REPLICATE_VIDEO_MODEL, versionPinned:Boolean(REPLICATE_VIDEO_VERSION) },
 }));
 
 // POST /magic
 app.post("/magic", upload.single("image"), async (req,res)=>{
   try {
-    if (!mustBeOkOpenAI(res)) return;
+        const provider = ((req.body?.provider || IMAGE_PROVIDER || "openai").toString().toLowerCase());
+    if (provider === "replicate") {
+      if (!mustBeOkReplicate(res)) return;
+    } else {
+      if (!mustBeOkOpenAI(res)) return;
+    }
     const styleId = (req.body?.styleId || "").toString().trim();
     const file = req.file;
     if (!file?.buffer || file.buffer.length < 10) return res.status(400).json({ ok:false, error:"Missing image" });
 
     const id = `m_${crypto.randomUUID()}`;
     magicJobs.set(id, { status:"processing", createdAt: now() });
-    runOpenAIImageMagic({ jobId:id, file, styleId }); // async
+    if (provider === "replicate") {
+      runReplicateImageMagic({ jobId:id, file, styleId }); // async
+    } else {
+      runOpenAIImageMagic({ jobId:id, file, styleId }); // async
+    }
     return res.status(200).json({ ok:true, id });
   } catch (e) {
     return res.status(500).json({ ok:false, error:String(e?.message || e) });
