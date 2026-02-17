@@ -157,22 +157,42 @@ async function toPngBufferMax1024(inputBuf) {
 }
 
 
-async function chooseOpenAIImageSizeFromBuffer(pngBuf) {
-  // Pick output size by input orientation to reduce implicit zoom/crop.
+async function chooseOpenAIImageSizeFromPng(pngBuf) {
+  // Avoid implicit zoom/crop by matching generation size to input orientation.
   await loadSharp();
   const meta = await _sharp(pngBuf).metadata();
   const w = Number(meta?.width || 1024);
   const h = Number(meta?.height || 1024);
   const ar = w / Math.max(1, h);
-
-  // Landscape
-  if (ar >= 1.15) return "1536x1024";
-  // Portrait
-  if (ar <= 0.87) return "1024x1536";
-  // Near-square
-  return "1024x1024";
+  if (ar >= 1.15) return "1536x1024"; // landscape
+  if (ar <= 0.87) return "1024x1536"; // portrait
+  return "1024x1024"; // near-square
 }
 
+async function makeProtectedBorderMaskFromPng(pngBuf, protectPct = 0.14) {
+  // Create a mask where the OUTER border is protected (black), and only the inner area is editable (white).
+  // This anchors framing: edges can't be "redrawn away", so the model is far less likely to recompose/crop.
+  await loadSharp();
+  const meta = await _sharp(pngBuf).metadata();
+  const w = Number(meta?.width || 1024);
+  const h = Number(meta?.height || 1024);
+  const inset = Math.max(8, Math.round(Math.min(w, h) * protectPct));
+
+  const outer = await _sharp({
+    create: { width: w, height: h, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 1 } }
+  }).png().toBuffer();
+
+  const innerW = Math.max(1, w - inset * 2);
+  const innerH = Math.max(1, h - inset * 2);
+  const inner = await _sharp({
+    create: { width: innerW, height: innerH, channels: 4, background: { r: 255, g: 255, b: 255, alpha: 1 } }
+  }).png().toBuffer();
+
+  return await _sharp(outer)
+    .composite([{ input: inner, left: inset, top: inset }])
+    .png()
+    .toBuffer();
+}
 
 async function bufferToOpenAIFile(buf, filename, mime) {
   await loadOpenAI();
@@ -191,20 +211,23 @@ async function runOpenAIImageMagic({ jobId, file, styleId }) {
   try {
     const client = await getOpenAIClient();
     const basePrompt = getStylePrompt(styleId);
-    const preserve = "CRITICAL: Preserve the exact composition, framing, geometry, and positions of ALL elements from the input drawing. Do NOT zoom in. Do NOT crop. Do NOT cut off edges. Do NOT recompose. Do NOT move objects. Change ONLY colors, shading, and style while keeping the original linework and layout intact.";
-    const prompt = `${basePrompt}\n\n${preserve}`;
+    const framingGuard = "IMPORTANT: Preserve the entire original drawing and framing. Keep EVERY object in the same position and size. Do NOT zoom in, do NOT crop, do NOT reframe, do NOT move objects. Only add color, shading, and premium style on top of what is already drawn.";
+    const prompt = `${basePrompt}\n\n${framingGuard}`;
 
     // Convert input to PNG and cap max dimension to 1024 (cheaper than raw, but preserves framing better than 512)
     const pngBuf = await toPngBufferMax1024(file.buffer);
     const openaiImage = await bufferToOpenAIFile(pngBuf, "input.png", "image/png");
+    const maskBuf = await makeProtectedBorderMaskFromPng(pngBuf, 0.16);
+    const openaiMask = await bufferToOpenAIFile(maskBuf, "mask.png", "image/png");
+    const resolvedSize = (OPENAI_IMAGE_SIZE === "auto") ? await chooseOpenAIImageSizeFromPng(pngBuf) : OPENAI_IMAGE_SIZE;
 
     const result = await client.images.edit({
       model: OPENAI_IMAGE_MODEL,          // gpt-image-1 or gpt-image-1-mini
       image: openaiImage,
+      mask: openaiMask,
       prompt,
-            size: (OPENAI_IMAGE_SIZE === "auto" ? await chooseOpenAIImageSizeFromBuffer(pngBuf) : OPENAI_IMAGE_SIZE),
+      size: resolvedSize,
       quality: OPENAI_IMAGE_QUALITY,      // low|medium|high
-      input_fidelity: (String(OPENAI_IMAGE_MODEL).includes("mini") ? undefined : "high"),
       output_format: OPENAI_OUTPUT_FORMAT // png|jpeg|webp
     });
 
