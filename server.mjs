@@ -55,6 +55,21 @@ const VIDEO_NUM_FRAMES = parseInt(process.env.VIDEO_NUM_FRAMES || "81", 10);
 const VIDEO_GO_FAST = (process.env.VIDEO_GO_FAST || "true").toLowerCase() === "true";
 const VIDEO_INTERPOLATE = (process.env.VIDEO_INTERPOLATE || "false").toLowerCase() === "true";
 
+
+// DEBUG (optional): echo back exactly what the server received (to diagnose cropping)
+// Set DEBUG_TOKEN to enable. Then call:
+//   GET /debug/info?token=...  -> metadata
+//   GET /debug/last?token=...  -> returns last uploaded image bytes
+//   POST /debug/clear?token=... -> clears stored image
+const DEBUG_TOKEN = (process.env.DEBUG_TOKEN || "").trim();
+let _lastUpload = null; // { bytes:Buffer, mime:string, route:string, at:number }
+
+function _debugEnabled(req) {
+  if (!DEBUG_TOKEN) return false;
+  const t = String(req.query?.token || req.headers["x-debug-token"] || "").trim();
+  return t && t === DEBUG_TOKEN;
+}
+
 // ---------- Upload ----------
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -213,6 +228,36 @@ app.get("/me", (_req,res)=>res.status(200).json({
   }
 }));
 
+// ---------- DEBUG endpoints (optional) ----------
+app.get("/debug/info", (req, res) => {
+  if (!_debugEnabled(req)) return res.status(404).json({ ok:false, error:"Not found" });
+  if (!_lastUpload) return res.status(200).json({ ok:true, has:false });
+  return res.status(200).json({
+    ok:true,
+    has:true,
+    route:_lastUpload.route,
+    mime:_lastUpload.mime,
+    bytes:_lastUpload.bytes?.length || 0,
+    at:_lastUpload.at,
+    ageMs: Date.now() - _lastUpload.at,
+  });
+});
+
+app.get("/debug/last", (req, res) => {
+  if (!_debugEnabled(req)) return res.status(404).send("Not found");
+  if (!_lastUpload?.bytes) return res.status(404).send("No debug image stored");
+  res.setHeader("Content-Type", _lastUpload.mime || "application/octet-stream");
+  res.setHeader("Cache-Control", "no-store");
+  return res.status(200).send(_lastUpload.bytes);
+});
+
+app.post("/debug/clear", (req, res) => {
+  if (!_debugEnabled(req)) return res.status(404).json({ ok:false, error:"Not found" });
+  _lastUpload = null;
+  return res.status(200).json({ ok:true });
+});
+
+
 // ---------- IMAGE: POST /magic ----------
 app.post("/magic", upload.single("image"), async (req,res)=>{
   try {
@@ -223,6 +268,11 @@ app.post("/magic", upload.single("image"), async (req,res)=>{
 
     if (!file?.buffer || file.buffer.length < 10) {
       return res.status(400).json({ ok:false, error:"Missing image" });
+    }
+
+    // store last received upload for debugging (if enabled)
+    if (DEBUG_TOKEN) {
+      _lastUpload = { bytes: Buffer.from(file.buffer), mime: file.mimetype || "application/octet-stream", route: "/magic", at: Date.now() };
     }
 
     if (!REPLICATE_IMAGE_VERSION || !isHex64(REPLICATE_IMAGE_VERSION)) {
@@ -349,6 +399,11 @@ app.post("/video/start", upload.single("image"), async (req,res)=>{
 
     const file = req.file;
     if (!file?.buffer || file.buffer.length < 10) return res.status(400).json({ ok:false, error:"Missing image" });
+
+    // store last received upload for debugging (if enabled)
+    if (DEBUG_TOKEN) {
+      _lastUpload = { bytes: Buffer.from(file.buffer), mime: file.mimetype || "application/octet-stream", route: "/video/start", at: Date.now() };
+    }
 
     const userPrompt = (req.body?.prompt || "").toString().trim();
     const prompt = buildVideoPrompt(userPrompt);
