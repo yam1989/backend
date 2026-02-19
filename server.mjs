@@ -129,82 +129,76 @@ function bufferToDataUri(buf, mime) {
 function isHex64(s) { return /^[0-9a-f]{64}$/i.test(String(s || "").trim()); }
 
 function getStyleExtra(styleId) {
-  // DM-2026 STYLE SYSTEM (stable, no drift)
-  // We keep a strict base lock and add a small style block.
-  // Also supports env override via STYLE_PROMPTS_JSON (optional).
-
-  const idRaw = String(styleId || "").trim().toLowerCase();
-
-  // Backward-compatible aliases (older Flutter builds)
-  const alias = {
-    "img_3d": "pixar",
-    "img_cartoon": "cartoon",
-    "img_watercolor": "storybook",
-    "img_magic": "storybook",
-    "img_clay": "clay",
-  };
-
-  const id = alias[idRaw] || idRaw;
-
-  // Optional env-driven overrides
+  if (!styleId) return "";
   if (STYLE_PROMPTS_JSON) {
     try {
       const map = JSON.parse(STYLE_PROMPTS_JSON);
-      if (map && typeof map === "object" && map[id]) return String(map[id]);
+      if (map && typeof map === "object" && map[styleId]) return String(map[styleId]);
     } catch {}
   }
-
-  // Default fallback
-  const style = id || "pixar";
-
-  const blocks = {
-    pixar:
-      "Strong 3D look, subsurface scattering, cinematic lighting, soft global illumination, premium Pixar-like render (child-friendly).",
-    cartoon:
-      "Soft animated series cartoon, clean gradients, crisp outlines, bright kid-friendly palette, smooth cel shading.",
-    storybook:
-      "Painterly storybook illustration, warm lighting, fairytale vibe, rich brushwork, gentle color transitions.",
-    clay:
-      "Plasticine clay, matte tactile surfaces, stop-motion claymation look, soft studio lighting, handmade feel.",
-  };
-
-  return blocks[style] || blocks.pixar;
+  return `Style hint: ${styleId}.`;
 }
 
 function buildKontextPrompt(styleId) {
-  const BASE_STRUCTURE_LOCK =
-    "This is a child\u2019s drawing. Stylize it into a premium illustration while preserving the drawing structure 1:1. " +
-    "CRITICAL RULES: Do NOT crop. Do NOT zoom. Do NOT change camera. Preserve positions and proportions exactly. " +
-    "Do NOT add new objects, characters, text, logos, frames, borders, or extra details. " +
-    "Do NOT remove anything that exists. " +
-    "Keep the same composition and framing. " +
-    "Clean up lines, improve coloring and shading, but keep every element in the same place. " +
-    "Remove paper texture / scan artifacts. No watermark.";
-
-  const STYLE_BLOCK = getStyleExtra(styleId);
-
-  return `${BASE_STRUCTURE_LOCK} STYLE: ${STYLE_BLOCK}`.trim();
+  const base =
+    "Edit this image: transform the child’s drawing into a premium, colorful Pixar-like 3D cartoon illustration. " +
+    "CRITICAL: keep the same framing and composition. Do NOT crop. Do NOT zoom. Do NOT change camera. " +
+    "Keep the same objects and their positions (minor beautification allowed). " +
+    "Make it FULL COLOR, high-end, clean, smooth. Add cinematic lighting, soft shadows, global illumination, depth. " +
+    "Remove paper texture and scan artifacts. Background should be clean and simple. " +
+    "No text, no watermark.";
+  return `${base} ${getStyleExtra(styleId)}`.trim();
 }
 
 function buildVideoPrompt(userPrompt) {
   const p = String(userPrompt || "").trim();
   if (p) return p;
   return (
-    "This is a child’s hand-drawn picture.\n\n" +
-    "Animate ONLY the objects that already exist in the drawing.\n" +
-    "Do NOT add any new objects.\n" +
-    "Do NOT remove anything.\n" +
-    "Do NOT change composition, framing, proportions, or camera angle.\n" +
-    "No zoom. No camera movement.\n\n" +
-    "Preserve the original structure 1:1.\n" +
-    "Keep all shapes and positions exactly the same.\n\n" +
-    "Bring the drawing to life in a premium Pixar-style animation:\n" +
-    "• Soft dimensional lighting and gentle depth\n" +
-    "• Subtle shadows\n" +
-    "• Smooth, high-quality motion with natural easing\n" +
-    "• Small ambient motion everywhere\n\n" +
-    "STRICTLY no new objects or details.\n" +
-    "Loop-friendly. Smooth. Clean."
+    "This is a child’s hand-drawn picture.
+
+" +
+    "Preserve original composition 1:1.
+" +
+    "Do not add any new objects.
+" +
+    "Do not remove anything.
+" +
+    "Do not change camera.
+" +
+    "No zoom. No reframing.
+" +
+    "Keep all positions exactly the same.
+
+" +
+    "Animate ALL existing objects in the drawing.
+" +
+    "Every object must have subtle or active motion, using only shapes that already exist.
+
+" +
+    "Vehicles: wheels rotate and slight forward motion along the drawn ground line.
+" +
+    "Animals and people: blinking, gentle body sway, small natural gestures.
+" +
+    "Sun: soft glowing pulse or slow rotation.
+" +
+    "Clouds: slow drifting.
+" +
+    "Water: gentle wave motion.
+" +
+    "Trees and grass: subtle wind movement.
+" +
+    "Smoke or steam: light rising motion if drawn.
+" +
+    "Flags: flutter gently if drawn.
+
+" +
+    "Smooth, premium Pixar-style animation.
+" +
+    "Soft dimensional lighting.
+" +
+    "Loop-friendly.
+" +
+    "No new objects. No extra details."
   );
 }
 
