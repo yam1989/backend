@@ -129,25 +129,61 @@ function bufferToDataUri(buf, mime) {
 function isHex64(s) { return /^[0-9a-f]{64}$/i.test(String(s || "").trim()); }
 
 function getStyleExtra(styleId) {
-  if (!styleId) return "";
+  // DM-2026 STYLE SYSTEM (stable, no drift)
+  // We keep a strict base lock and add a small style block.
+  // Also supports env override via STYLE_PROMPTS_JSON (optional).
+
+  const idRaw = String(styleId || "").trim().toLowerCase();
+
+  // Backward-compatible aliases (older Flutter builds)
+  const alias = {
+    "img_3d": "pixar",
+    "img_cartoon": "cartoon",
+    "img_watercolor": "storybook",
+    "img_magic": "storybook",
+    "img_clay": "clay",
+  };
+
+  const id = alias[idRaw] || idRaw;
+
+  // Optional env-driven overrides
   if (STYLE_PROMPTS_JSON) {
     try {
       const map = JSON.parse(STYLE_PROMPTS_JSON);
-      if (map && typeof map === "object" && map[styleId]) return String(map[styleId]);
+      if (map && typeof map === "object" && map[id]) return String(map[id]);
     } catch {}
   }
-  return `Style hint: ${styleId}.`;
+
+  // Default fallback
+  const style = id || "pixar";
+
+  const blocks = {
+    pixar:
+      "Strong 3D look, subsurface scattering, cinematic lighting, soft global illumination, premium Pixar-like render (child-friendly).",
+    cartoon:
+      "Soft animated series cartoon, clean gradients, crisp outlines, bright kid-friendly palette, smooth cel shading.",
+    storybook:
+      "Painterly storybook illustration, warm lighting, fairytale vibe, rich brushwork, gentle color transitions.",
+    clay:
+      "Plasticine clay, matte tactile surfaces, stop-motion claymation look, soft studio lighting, handmade feel.",
+  };
+
+  return blocks[style] || blocks.pixar;
 }
 
 function buildKontextPrompt(styleId) {
-  const base =
-    "Edit this image: transform the child’s drawing into a premium, colorful Pixar-like 3D cartoon illustration. " +
-    "CRITICAL: keep the same framing and composition. Do NOT crop. Do NOT zoom. Do NOT change camera. " +
-    "Keep the same objects and their positions (minor beautification allowed). " +
-    "Make it FULL COLOR, high-end, clean, smooth. Add cinematic lighting, soft shadows, global illumination, depth. " +
-    "Remove paper texture and scan artifacts. Background should be clean and simple. " +
-    "No text, no watermark.";
-  return `${base} ${getStyleExtra(styleId)}`.trim();
+  const BASE_STRUCTURE_LOCK =
+    "This is a child\u2019s drawing. Stylize it into a premium illustration while preserving the drawing structure 1:1. " +
+    "CRITICAL RULES: Do NOT crop. Do NOT zoom. Do NOT change camera. Preserve positions and proportions exactly. " +
+    "Do NOT add new objects, characters, text, logos, frames, borders, or extra details. " +
+    "Do NOT remove anything that exists. " +
+    "Keep the same composition and framing. " +
+    "Clean up lines, improve coloring and shading, but keep every element in the same place. " +
+    "Remove paper texture / scan artifacts. No watermark.";
+
+  const STYLE_BLOCK = getStyleExtra(styleId);
+
+  return `${BASE_STRUCTURE_LOCK} STYLE: ${STYLE_BLOCK}`.trim();
 }
 
 function buildVideoPrompt(userPrompt) {
