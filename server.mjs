@@ -153,53 +153,32 @@ function buildKontextPrompt(styleId) {
 function buildVideoPrompt(userPrompt) {
   const p = String(userPrompt || "").trim();
   if (p) return p;
-  return (
-    "This is a child’s hand-drawn picture.
 
-" +
-    "Preserve original composition 1:1.
-" +
-    "Do not add any new objects.
-" +
-    "Do not remove anything.
-" +
-    "Do not change camera.
-" +
-    "No zoom. No reframing.
-" +
-    "Keep all positions exactly the same.
+  return `This is a child’s hand-drawn picture.
 
-" +
-    "Animate ALL existing objects in the drawing.
-" +
-    "Every object must have subtle or active motion, using only shapes that already exist.
+Preserve original composition 1:1.
+Do not add any new objects.
+Do not remove anything.
+Do not change camera.
+No zoom. No reframing.
+Keep all positions exactly the same.
 
-" +
-    "Vehicles: wheels rotate and slight forward motion along the drawn ground line.
-" +
-    "Animals and people: blinking, gentle body sway, small natural gestures.
-" +
-    "Sun: soft glowing pulse or slow rotation.
-" +
-    "Clouds: slow drifting.
-" +
-    "Water: gentle wave motion.
-" +
-    "Trees and grass: subtle wind movement.
-" +
-    "Smoke or steam: light rising motion if drawn.
-" +
-    "Flags: flutter gently if drawn.
+Animate ALL existing objects in the drawing.
+Every object must have subtle or active motion, using only shapes that already exist.
 
-" +
-    "Smooth, premium Pixar-style animation.
-" +
-    "Soft dimensional lighting.
-" +
-    "Loop-friendly.
-" +
-    "No new objects. No extra details."
-  );
+Vehicles: wheels rotate and slight forward motion along the drawn ground line.
+Animals and people: blinking, gentle body sway, small natural gestures.
+Sun: soft glowing pulse or slow rotation.
+Clouds: slow drifting.
+Water: gentle wave motion.
+Trees and grass: subtle wind movement.
+Smoke or steam: light rising motion if drawn.
+Flags: flutter gently if drawn.
+
+Smooth, premium Pixar-style animation.
+Soft dimensional lighting.
+Loop-friendly.
+No new objects. No extra details.`;
 }
 
 // ---------- Replicate API ----------
