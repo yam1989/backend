@@ -1,9 +1,9 @@
-// DM-2026 backend — v17.0 (SMART STYLE STRENGTH)
+// DM-2026 backend — v18.0 (PER-STYLE BALANCING)
 import express from "express";
 import multer from "multer";
 import crypto from "crypto";
 
-const VERSION = "DM-2026 FULL v17.0 (PER-STYLE STRENGTH)";
+const VERSION = "DM-2026 FULL v18.0 (BALANCE FIX)";
 const app = express();
 app.disable("x-powered-by");
 const PORT = parseInt(process.env.PORT || "8080", 10);
@@ -12,14 +12,22 @@ const REPLICATE_API_TOKEN = process.env.REPLICATE_API_TOKEN || "";
 const REPLICATE_IMAGE_VERSION = (process.env.REPLICATE_IMAGE_VERSION || "0f1178f5a27e9aa2d2d39c8a43c110f7fa7cbf64062ff04a04cd40899e546065").trim();
 const REPLICATE_VIDEO_VERSION = (process.env.REPLICATE_VIDEO_VERSION || "").trim();
 
-// --- УМНЫЕ НАСТРОЙКИ СИЛЫ ДЛЯ КАЖДОГО СТИЛЯ ---
+// --- ТОЧНЫЕ НАСТРОЙКИ ДЛЯ КАЖДОГО СТИЛЯ ---
 const styleConfigs = {
-  "style_watercolor": { strength: 0.95, guidance: 10, upsampling: true }, // Максимум силы для Акварели
-  "style_pixels":     { strength: 0.90, guidance: 8,  upsampling: true }, // Сильно для Пикселей
-  "style_fairy":      { strength: 0.85, guidance: 7.5, upsampling: true }, // Для Диснея
-  "style_clay":       { strength: 0.85, guidance: 7.5, upsampling: true }, 
-  "style_anime":      { strength: 0.80, guidance: 7.5, upsampling: true },
-  "default":          { strength: 0.75, guidance: 7.5, upsampling: false } // Стандарт для 3D, Неона и т.д.
+  // Акварель требует максимума, чтобы стереть карандаш
+  "style_watercolor": { strength: 0.95, guidance: 10.0, upsampling: true }, 
+  // Пиксели должны быть жестко кубическими
+  "style_pixels":     { strength: 0.90, guidance: 8.0,  upsampling: true },
+  // Остальные стили возвращаем к рабочим настройкам (чтобы не теряли силу)
+  "style_3d_magic":   { strength: 0.70, guidance: 7.0,  upsampling: false },
+  "style_blocks":     { strength: 0.75, guidance: 7.0,  upsampling: false },
+  "style_neon":       { strength: 0.75, guidance: 7.5,  upsampling: false },
+  "style_comic":      { strength: 0.75, guidance: 7.5,  upsampling: false },
+  "style_cardboard":  { strength: 0.80, guidance: 7.0,  upsampling: false },
+  "style_anime":      { strength: 0.80, guidance: 7.5,  upsampling: true },
+  "style_fairy":      { strength: 0.85, guidance: 8.0,  upsampling: true },
+  "style_clay":       { strength: 0.85, guidance: 7.5,  upsampling: true },
+  "default":          { strength: 0.75, guidance: 7.5,  upsampling: false }
 };
 
 const styleMap = {
@@ -28,15 +36,15 @@ const styleMap = {
   "style_neon": "Cyberpunk neon glow, futuristic synthwave aesthetic, glowing outlines, high contrast, dark background.",
   "style_comic": "Vintage comic book art, halftone dot patterns, bold black ink outlines, pop art style, vibrant colors.",
   "style_cardboard": "Handmade cardboard craft. The monster must be made of cut-out layered brown corrugated paper. Rough edges, 3D diorama look.",
-  "style_pixels": "Minecraft blocky aesthetic. Total 3D Voxel art reconstruction. The monster MUST be built entirely from CUBIC BLOCKS. NO smooth lines, NO pencil, NO paper. Every detail is a pixel-perfect square block.",
-  "style_anime": "Classic 2D flat cel-shaded anime style. Studio Ghibli aesthetic, bold hand-drawn ink outlines, flat vibrant colors, NO 3D shading.",
-  "style_fairy": "Golden age of Disney animation (1950s). Hand-painted gouache illustration, magical glow, soft storybook textures. Complete character repaint.",
-  "style_clay": "Ultra-thick plasticine claymation. Chunky handmade shapes, deep fingerprints, glossy clay reflections, soft volumetric 3D shapes.",
-  "style_watercolor": "Professional abstract fluid watercolor art on CLEAN WHITE paper. EXTREME paint bleeding, heavy water drops, artistic pigment blooms. ABSOLUTELY NO PENCIL LINES, NO PEN, NO BLACK OUTLINES."
+  "style_pixels": "Minecraft blocky aesthetic. Total 3D Voxel art reconstruction. The monster MUST be built entirely from CUBIC BLOCKS. NO smooth lines, NO pencil, NO paper.",
+  "style_anime": "Classic 2D flat cel-shaded anime style. Studio Ghibli aesthetic, bold hand-drawn ink outlines, flat vibrant colors.",
+  "style_fairy": "Golden age of Disney animation (1950s). Hand-painted gouache illustration, magical glow, soft storybook textures.",
+  "style_clay": "Ultra-thick plasticine claymation. Chunky handmade shapes, deep fingerprints, glossy clay reflections.",
+  "style_watercolor": "Professional abstract fluid watercolor art on CLEAN WHITE paper. EXTREME paint bleeding, heavy water drops, artistic pigment blooms. ABSOLUTELY NO PENCIL LINES."
 };
 
 function buildKontextPrompt(styleId) {
-  const base = "Masterpiece art transformation. Convert the child's drawing into a high-end illustration. STRICT: Keep composition. Totally change the texture. Remove all paper artifacts and pencil lines.";
+  const base = "Masterpiece art transformation. Convert the child's drawing into a high-end illustration. STRICT: Keep original composition. Remove all paper artifacts and pencil lines.";
   return `${base} ${styleMap[styleId] || ""}`.trim();
 }
 
@@ -49,20 +57,20 @@ app.post("/magic", upload.single("image"), async (req,res)=>{
   try {
     const file = req.file;
     const styleId = (req.body?.styleId || "").toString().trim();
-    if (!file?.buffer) return res.status(400).json({ ok:false });
+    if (!file?.buffer) return res.status(400).json({ ok:false, error:"Missing image" });
 
-    // ВЫБИРАЕМ НАСТРОЙКИ ПОД КОНКРЕТНЫЙ СТИЛЬ
-    const config = styleConfigs[styleId] || styleConfigs["default"];
+    // ПРИМЕНЯЕМ ИНДИВИДУАЛЬНУЮ КОНФИГУРАЦИЮ
+    const cfg = styleConfigs[styleId] || styleConfigs["default"];
 
     const input = {
       prompt: buildKontextPrompt(styleId),
       input_image: bufferToDataUri(file.buffer, file.mimetype),
       aspect_ratio: "match_input_image",
       output_format: "png",
-      safety_tolerance: 5,
-      prompt_strength: config.strength,  // Индивидуальная сила!
-      guidance: config.guidance,         // Индивидуальное следование промпту!
-      prompt_upsampling: config.upsampling
+      safety_tolerance: 2,
+      prompt_strength: cfg.strength,
+      guidance: cfg.guidance,
+      prompt_upsampling: cfg.upsampling
     };
 
     const r = await fetch("https://api.replicate.com/v1/predictions", {
@@ -72,16 +80,16 @@ app.post("/magic", upload.single("image"), async (req,res)=>{
     });
     const pred = await r.json();
     const id = `m_${crypto.randomUUID()}`;
-    magicJobs.set(id, { status:"processing", predId: pred.id });
+    magicJobs.set(id, { status:"processing", predId: pred.id, createdAt: Date.now() });
     return res.status(200).json({ ok:true, id });
-  } catch (e) { return res.status(500).json({ ok:false }); }
+  } catch (e) { return res.status(500).json({ ok:false, error:String(e) }); }
 });
 
-// Стандартные эндпоинты статуса и видео (без изменений)
+// --- СТАНДАРТНЫЕ МЕТОДЫ (СТАТУС, РЕЗУЛЬТАТ, ВИДЕО) ---
 app.get("/magic/status", async (req,res)=>{
-  const id = req.query.id;
+  const id = (req.query?.id || "").toString().trim();
   const job = magicJobs.get(id);
-  if (!job) return res.json({ status:"failed" });
+  if (!job) return res.json({ ok:true, status:"failed" });
   if (job.status === "succeeded") return res.json({ ok:true, status:"succeeded", outputUrl: `${req.protocol}://${req.get('host')}/magic/result?id=${id}` });
   const r = await fetch(`https://api.replicate.com/v1/predictions/${job.predId}`, { headers:{ Authorization:`Token ${REPLICATE_API_TOKEN}` } });
   const p = await r.json();
@@ -90,7 +98,8 @@ app.get("/magic/status", async (req,res)=>{
 });
 
 app.get("/magic/result", async (req,res)=>{
-  const job = magicJobs.get(req.query.id);
+  const id = (req.query?.id || "").toString().trim();
+  const job = magicJobs.get(id);
   if (!job?.rawUrl) return res.status(404).send("Not ready");
   const r = await fetch(job.rawUrl);
   res.setHeader("Content-Type", "image/png");
@@ -117,5 +126,5 @@ app.get("/video/status", async (req,res)=>{
   return res.json({ ok:true, status: p.status, outputUrl: p.output });
 });
 
-app.get("/", (req,res)=>res.send("DM-2026 Backend v17.0 OK"));
+app.get("/", (req,res)=>res.send("DM-2026 Backend v18.0 (Balance Fixed)"));
 app.listen(PORT, "0.0.0.0", () => console.log(`✅ ${VERSION} on port ${PORT}`));
