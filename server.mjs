@@ -82,13 +82,19 @@ const styleSpecMap = {
       "NO clay fingerprints. NO voxel Minecraft blocks. NO soft Disney 1950s storybook paint."
   },
 
-  style_watercolor: {
+   style_watercolor: {
     pos:
-      "Extreme professional watercolor painting. Heavy wet-on-wet technique. Strong pigment bleeding and bloom effects. " +
-      "Soft diffusion edges. Visible textured watercolor paper. MULTIPLE layered washes. Fully hide pencil lines and handwriting.",
+      "Traditional fine art watercolor painting on textured cotton paper. " +
+      "Heavy wet-on-wet technique with strong pigment diffusion and natural color bleeding. " +
+      "Soft dissolving edges, no hard outlines. " +
+      "Visible watercolor paper grain and subtle fiber texture. " +
+      "Layered transparent washes with organic paint blooms and water stains. " +
+      "Some edges gently dissolve into the background. " +
+      "Painterly, imperfect, artistic. Completely hide all original pencil lines and handwriting under paint layers.",
     neg:
-      "NO crisp ink outlines. NO 3D render. NO plastic toy shine. NO LEGO bricks. NO voxels. NO comic halftone dots. " +
-      "NO neon outline glow."
+      "NO crisp black outlines. NO vector lines. NO digital shading. NO smooth gradient rendering. " +
+      "NO 3D lighting. NO plastic shine. NO LEGO texture. NO voxel blocks. " +
+      "NO halftone comic dots. NO neon glow outlines."
   },
 
   style_cardboard: {
