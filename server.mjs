@@ -1,12 +1,12 @@
 // DM-2026 backend — Cloud Run (Node 20 + Express)
 // ✅ ВСЕ ФУНКЦИИ (ВИДЕО + ФОТО) СОХРАНЕНЫ
-// ✅ ДОБАВЛЕНО 10 СИЛЬНЫХ ПРОМПТОВ ВНУТРЬ КОДА
+// ✅ ОБНОВЛЕНЫ ПРОМПТЫ ДЛЯ ПОЛНОЙ ТРАНСФОРМАЦИИ
 
 import express from "express";
 import multer from "multer";
 import crypto from "crypto";
 
-const VERSION = "DM-2026 FULL v10.0 (10 STYLES + VIDEO FIXED)";
+const VERSION = "DM-2026 FULL v11.0 (ULTRA PROMPTS)";
 
 const app = express();
 app.disable("x-powered-by");
@@ -16,18 +16,17 @@ const REPLICATE_API_TOKEN = process.env.REPLICATE_API_TOKEN || "";
 const REPLICATE_IMAGE_VERSION = (process.env.REPLICATE_IMAGE_VERSION || "0f1178f5a27e9aa2d2d39c8a43c110f7fa7cbf64062ff04a04cd40899e546065").trim();
 const REPLICATE_VIDEO_VERSION = (process.env.REPLICATE_VIDEO_VERSION || "").trim();
 
-// --- НОВЫЕ СИЛЬНЫЕ ПРОМПТЫ ДЛЯ 10 СТИЛЕЙ ---
 const styleMap = {
   "style_3d_magic": "Transform into a premium Pixar-style 3D animation, Disney character aesthetic, volumetric lighting, masterpiece.",
   "style_blocks": "Lego photography style, made of plastic interlocking bricks, toy world, vibrant colors, studio lighting.",
-  "style_pixels": "Extremely sharp 128-bit pixel art style. Total transformation. Every part of the monster must be made of visible, large square pixels. NO HANDWRITING, NO TEXT. Pure digital sprite aesthetic. Solid vibrant colors.",
-  "style_fairy": "Fairytale storybook illustration, glowing magic aura, soft oil painting, warm golden lighting, enchanted forest.",
-  "style_anime": "Studio Ghibli style, Hayao Miyazaki aesthetic, hand-painted anime art, lush environment, whimsical.",
-  "style_clay": "Claymation style, handcrafted plasticine monster, stop-motion aesthetic, fingerprints texture, soft clay surface.",
+  "style_pixels": "Total transformation into sharp 128-bit pixel art sprite. The creature MUST be made of visible large square pixels. NO PAPER, NO TEXT, NO HANDWRITING. Pure digital game aesthetic.",
+  "style_fairy": "Fairytale storybook style. Complete repaint of the monster as a soft oil-painted magical creature. Ethereal glow, warm magical lighting. Focus on creature, ignore paper background.",
+  "style_anime": "Hand-drawn Japanese anime style, Studio Ghibli aesthetic, flat cel-shading, bold artistic lines, whimsical atmosphere.",
+  "style_clay": "Real claymation style. The monster must be made of handmade plasticine. Visible fingerprints, soft clay texture, stop-motion movie prop look, volumetric shapes.",
   "style_neon": "Cyberpunk neon glow, futuristic synthwave aesthetic, glowing outlines, high contrast, dark background.",
-  "style_watercolor": "Artistic watercolor painting, wet-on-wet technique, soft edges, paper texture, elegant ink splatters.",
-  "style_cardboard": "Cardboard toy style, layered corrugated paper craft, handmade texture, diorama aesthetic.",
-  "style_comic": "Vintage comic book art, halftone dot patterns, bold black ink outlines, pop art style, vibrant colors."
+  "style_watercolor": "Artistic watercolor painting on wet paper. Soft bleeding edges, elegant ink splatters, artistic brush strokes. Complete repaint, ignore pencil lines and paper texture.",
+  "style_cardboard": "Handmade cardboard craft. The monster must be made of cut-out layered brown corrugated paper. Rough edges, 3D diorama look, papercraft masterpiece.",
+  "style_comic": "Vintage comic book art, halftone dot patterns, bold black ink outlines, pop art style, vibrant colors, retro ink aesthetic."
 };
 
 function getStyleExtra(styleId) {
@@ -37,21 +36,18 @@ function getStyleExtra(styleId) {
 function buildKontextPrompt(styleId) {
   const base = 
     "Masterpiece art transformation. Convert the child's drawing into a high-end, colorful illustration. " +
-    "STRICT: Keep 1:1 original composition. Do NOT zoom. Do NOT crop. " +
-    "Maintain the exact position and shapes of the original monster. " +
-    "Add cinematic lighting, professional textures, and clean smooth surfaces. " +
-    "Remove paper artifacts. Professional commercial artwork look.";
+    "STRICT: Keep original composition. Do NOT zoom. Do NOT crop. " +
+    "Maintain the shapes but TOTALLY change the texture. Remove all paper artifacts and handwriting. " +
+    "Professional commercial artwork look.";
   return `${base} ${getStyleExtra(styleId)}`.trim();
 }
 
-// --- ВИДЕО ПРОМПТ (БЕЗ ИЗМЕНЕНИЙ) ---
 function buildVideoPrompt(userPrompt) {
   const p = String(userPrompt || "").trim();
   if (p) return p;
   return `Animate ALL existing objects in the drawing. Smooth, premium Pixar-style animation. Soft dimensional lighting. No new objects.`;
 }
 
-// --- ОСТАЛЬНАЯ ЛОГИКА (ПОЛНОСТЬЮ СОХРАНЕНА) ---
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
 const magicJobs = new Map();
 
@@ -113,7 +109,6 @@ app.get("/magic/result", async (req,res)=>{
   return res.status(200).send(Buffer.from(await r.arrayBuffer()));
 });
 
-// --- VIDEO ENDPOINTS (СОХРАНЕНЫ) ---
 app.post("/video/start", upload.single("image"), async (req,res)=>{
   try {
     const file = req.file;
@@ -138,5 +133,5 @@ app.get("/video/status", async (req,res)=>{
   return res.json({ ok:true, status: p.status, outputUrl: p.output });
 });
 
-app.get("/", (req,res)=>res.send("DM-2026 Full Server OK"));
+app.get("/", (req,res)=>res.send("DM-2026 Backend Full OK"));
 app.listen(PORT, "0.0.0.0", () => console.log(`✅ ${VERSION} on port ${PORT}`));
