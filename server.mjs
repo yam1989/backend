@@ -83,20 +83,19 @@ const styleSpecMap = {
       "NO clay fingerprints. NO voxel Minecraft blocks. NO soft Disney 1950s storybook paint."
   },
 
-  // ✅ АКВАРЕЛЬ (усиленная)
-  style_watercolor: {
+  // ✅  Масляные краски (усиленная)
+    style_watercolor: {
     pos:
-      "Traditional fine art watercolor painting on textured cotton paper. " +
-      "Heavy wet-on-wet technique with strong pigment diffusion and natural color bleeding. " +
-      "Soft dissolving edges, no hard outlines. " +
-      "Visible watercolor paper grain and subtle fiber texture. " +
-      "Layered transparent washes with organic paint blooms and water stains. " +
-      "Some edges gently dissolve into the background. " +
-      "Painterly, imperfect, artistic. Completely hide all original pencil lines and handwriting under paint layers.",
+      "Classical fine art oil painting on canvas. Thick impasto brush strokes. " +
+      "Visible textured oil paint layers. Rich pigment density. " +
+      "Heavy palette knife strokes. Painterly depth and dramatic lighting. " +
+      "Canvas fabric texture visible. Strong contrast between light and shadow. " +
+      "Art gallery masterpiece style. Completely repaint from scratch in oil paint. " +
+      "Ignore original crayon texture. Replace all lines with expressive brushwork.",
     neg:
-      "NO crisp black outlines. NO vector lines. NO digital shading. NO smooth gradient rendering. " +
-      "NO 3D lighting. NO plastic shine. NO LEGO texture. NO voxel blocks. " +
-      "NO halftone comic dots. NO neon glow outlines."
+      "NO watercolor bleeding. NO paper texture. NO pencil lines. NO vector outlines. " +
+      "NO flat cel shading. NO LEGO plastic. NO voxel blocks. NO halftone comic dots. " +
+      "NO neon glow outlines."
   },
 
   style_cardboard: {
