@@ -1,12 +1,12 @@
 // DM-2026 backend — Cloud Run (Node 20 + Express)
 // ✅ ВСЕ ФУНКЦИИ (ВИДЕО + ФОТО) СОХРАНЕНЫ
-// ✅ ПРОМПТЫ УСИЛЕНЫ: АКВАРЕЛЬ, ПИКСЕЛЬ (MINECRAFT), СКАЗКА
+// ✅ ПРОМПТЫ УСИЛЕНЫ: АКВАРЕЛЬ, ПИКСЕЛЬ (MINECRAFT), СКАЗКА + добавлены style-specific negatives (v13)
 
 import express from "express";
 import multer from "multer";
 import crypto from "crypto";
 
-const VERSION = "DM-2026 FULL v12.0 (FINAL STYLE TUNING)";
+const VERSION = "DM-2026 FULL v13.0 (STYLE ENFORCEMENT + NEGATIVE CONSTRAINTS)";
 
 const app = express();
 app.disable("x-powered-by");
@@ -16,42 +16,136 @@ const REPLICATE_API_TOKEN = process.env.REPLICATE_API_TOKEN || "";
 const REPLICATE_IMAGE_VERSION = (process.env.REPLICATE_IMAGE_VERSION || "0f1178f5a27e9aa2d2d39c8a43c110f7fa7cbf64062ff04a04cd40899e546065").trim();
 const REPLICATE_VIDEO_VERSION = (process.env.REPLICATE_VIDEO_VERSION || "").trim();
 
-// --- ОБНОВЛЕННЫЙ СЛОВАРЬ СТИЛЕЙ ---
-const styleMap = {
-  // ЭТИ РАБОТАЮТ ХОРОШО - НЕ ТРОГАЕМ
-  "style_3d_magic": "Transform into a premium Pixar-style 3D animation, Disney character aesthetic, volumetric lighting, masterpiece.",
-  "style_blocks": "Lego photography style, made of plastic interlocking bricks, toy world, vibrant colors, studio lighting.",
-  "style_neon": "Cyberpunk neon glow, futuristic synthwave aesthetic, glowing outlines, high contrast, dark background.",
-  "style_comic": "Vintage comic book art, halftone dot patterns, bold black ink outlines, pop art style, vibrant colors.",
-  "style_cardboard": "Handmade cardboard craft. The monster must be made of cut-out layered brown corrugated paper. Rough edges, 3D diorama look.",
+// --- ОБНОВЛЕННЫЙ СЛОВАРЬ СТИЛЕЙ (POS + NEG) ---
+const styleSpecMap = {
+  style_3d_magic: {
+    pos:
+      "Ultra high-end Pixar / Disney 3D character redesign. Cinematic global illumination, volumetric light rays, subsurface scattering. " +
+      "Premium animated movie rendering. Real depth in fur and materials, physically based rendering. " +
+      "Glossy expressive eyes with detailed reflections. Clean studio background, masterpiece animation frame.",
+    neg:
+      "NO flat 2D. NO anime lines. NO halftone. NO comic dots. NO cardboard craft. NO LEGO studs. NO voxel blocks. " +
+      "NO watercolor bleeding. NO paper texture."
+  },
 
-  // ИСПРАВЛЕННЫЙ ПИКСЕЛЬ (Minecraft Edition)
-  "style_pixels": "Minecraft blocky aesthetic. Total 3D Voxel art reconstruction. The monster MUST be built entirely from CUBIC BLOCKS. NO smooth lines, NO pencil strokes, NO paper. Every detail is a pixel-perfect square block. Vibrant solid colors.",
-  
-  // ИСПРАВЛЕННОЕ АНИМЕ (Настоящее 2D)
-  "style_anime": "Classic 2D flat cel-shaded anime style. Studio Ghibli aesthetic, bold hand-drawn ink outlines, flat vibrant colors, NO 3D shading, whimsical hand-painted background.",
-  
-  // ИСПРАВЛЕННАЯ СКАЗКА (Disney Classic)
-  "style_fairy": "Golden age of Disney animation (1950s). Hand-painted gouache illustration, magical glow, soft storybook textures, high-end masterpiece. Character must be fully repainted, ignore pencil lines.",
-  
-  // ИСПРАВЛЕННАЯ АКВАРЕЛЬ (Максимальное усиление)
-  "style_watercolor": "Professional fluid watercolor painting. EXTREME paint bleeding, wet-on-wet technique, artistic pigment blooms, heavy water saturation. MUST HIDE ALL ORIGINAL PENCIL LINES and handwriting under layers of paint. Masterpiece fluid art.",
-  
-  // ИСПРАВЛЕННЫЙ ПЛАСТИЛИН (Более жирный)
-  "style_clay": "Ultra-thick plasticine claymation. Chunky handmade shapes, deep fingerprints, glossy clay reflections, soft volumetric 3D shapes, stop-motion film prop aesthetic."
+  style_blocks: {
+    pos:
+      "Full LEGO brick reconstruction. Character MUST be entirely built from glossy interlocking plastic bricks with visible studs. " +
+      "Injection-molded toy plastic material, vibrant primary colors, clean modular geometry. Studio toy photography lighting.",
+    neg:
+      "NO fur. NO paint strokes. NO watercolor. NO paper texture. NO pencil lines. NO organic skin. " +
+      "NO neon glow outlines. NO halftone comic print. NO clay fingerprints. NO voxels without studs."
+  },
+
+  style_pixels: {
+    pos:
+      "TRUE 3D voxel Minecraft reconstruction. The monster MUST be rebuilt entirely from cubic voxel blocks. " +
+      "All forms are square. Pixel-perfect block detail. Sandbox game aesthetic, simple game lighting, crisp edges.",
+    neg:
+      "NO curves. NO smooth surfaces. NO fur strands. NO pencil strokes. NO paper. NO watercolor. " +
+      "NO LEGO studs. NO cardboard fibers. NO halftone comic dots. NO neon glowing outlines."
+  },
+
+  style_fairy: {
+    pos:
+      "Golden age Disney 1950s fairytale illustration. Fully hand-painted gouache artwork. Soft romantic pastel palette. " +
+      "Magical glow aura, storybook lighting, warm rim light, rich painted textures. Character completely repainted.",
+    neg:
+      "NO 3D render look. NO plastic shine. NO LEGO. NO voxels. NO comic halftone. NO cyber neon. " +
+      "NO modern anime cel shading. NO visible pencil lines or paper photo artifacts."
+  },
+
+  style_anime: {
+    pos:
+      "Authentic 2D cel-shaded Japanese anime style. Clean hand-drawn ink outlines, flat vibrant color fills, " +
+      "minimal cel shading. Whimsical painted background. Studio Ghibli inspired cinematic frame.",
+    neg:
+      "NO 3D shading. NO PBR realism. NO plastic toy look. NO LEGO. NO voxels. NO comic halftone dots. " +
+      "NO watercolor bleed-heavy diffusion. NO neon cyber outlines."
+  },
+
+  style_clay: {
+    pos:
+      "Ultra-thick stop-motion plasticine claymation. Chunky handmade sculpted shapes. Deep visible fingerprints and tool marks. " +
+      "Soft volumetric 3D lighting. Glossy oily clay reflections. Real film prop aesthetic.",
+    neg:
+      "NO smooth digital 3D render. NO anime lines. NO watercolor paint. NO paper texture. NO LEGO studs. " +
+      "NO voxel blocks. NO halftone comic dots. NO neon outline-only rendering."
+  },
+
+  style_neon: {
+    pos:
+      "Futuristic cyber-neon transformation. Dark background, intense glowing cyan/magenta/lime accents. " +
+      "Bright luminous outlines tracing silhouette, holographic glow, subtle glitch energy. High contrast, reflective surface.",
+    neg:
+      "NO watercolor. NO paper texture. NO pencil lines. NO LEGO. NO cardboard craft. NO halftone comic print. " +
+      "NO clay fingerprints. NO voxel Minecraft blocks. NO soft Disney 1950s storybook paint."
+  },
+
+  style_watercolor: {
+    pos:
+      "Extreme professional watercolor painting. Heavy wet-on-wet technique. Strong pigment bleeding and bloom effects. " +
+      "Soft diffusion edges. Visible textured watercolor paper. MULTIPLE layered washes. Fully hide pencil lines and handwriting.",
+    neg:
+      "NO crisp ink outlines. NO 3D render. NO plastic toy shine. NO LEGO bricks. NO voxels. NO comic halftone dots. " +
+      "NO neon outline glow."
+  },
+
+  style_cardboard: {
+    pos:
+      "Handcrafted corrugated cardboard sculpture. Layered cut-out brown paper sheets. Visible fluted inner texture. " +
+      "Rough torn edges, handmade glue seams. Multi-layer 3D diorama look. Realistic tabletop craft photography.",
+    neg:
+      "NO watercolor paint. NO glossy plastic. NO LEGO studs. NO voxel blocks. NO neon glow outlines. " +
+      "NO halftone comic dots. NO smooth digital 3D render. NO anime cel shading."
+  },
+
+  style_comic: {
+    pos:
+      "1960s vintage pop-art comic style. Bold thick black ink outlines. Strong halftone dot shading. " +
+      "Limited CMYK print palette. Retro paper print texture. Slight color misregistration. Graphic high contrast.",
+    neg:
+      "NO watercolor bleed. NO 3D Pixar look. NO LEGO. NO voxels. NO clay fingerprints. NO cardboard fibers. " +
+      "NO neon sci-fi glow lines."
+  }
 };
 
 function getStyleExtra(styleId) {
-  return styleMap[styleId] || "Transform into a premium 3D cartoon illustration.";
+  const k = String(styleId || "").trim();
+  return styleSpecMap[k]?.pos || "Transform into a premium 3D cartoon illustration.";
+}
+
+function getStyleNegative(styleId) {
+  const k = String(styleId || "").trim();
+  return styleSpecMap[k]?.neg || "";
 }
 
 function buildKontextPrompt(styleId) {
-  const base = 
+  const base =
     "Masterpiece art transformation. Convert the child's drawing into a high-end, colorful illustration. " +
-    "STRICT: Keep original composition. Do NOT zoom. Do NOT crop. " +
-    "Maintain the shapes but TOTALLY change the texture. Remove all paper artifacts, handwriting, and pencil lines. " +
-    "Professional commercial artwork look.";
-  return `${base} ${getStyleExtra(styleId)}`.trim();
+    "STRICT: Keep original composition. Do NOT zoom. Do NOT crop. Do NOT rotate. Keep full character in frame. " +
+    "Maintain the original silhouette and pose but TOTALLY replace materials/texture in the target style. " +
+    "Remove all paper artifacts, handwriting, and pencil lines. " +
+    "No frames, no borders, no UI, no stickers, no watermark, no text. " +
+    "Professional commercial artwork look. Clean output.";
+
+  const globalNegative =
+    "STRICT NEGATIVE: no photo of paper, no notebook background, no graphite, no sketch lines, " +
+    "no blur crop, no cut-off body parts, no extra limbs, no duplicated faces, no extra characters, " +
+    "no random objects, no text, no logos, no watermarks.";
+
+  const stylePos = getStyleExtra(styleId);
+  const styleNeg = getStyleNegative(styleId);
+
+  const styleEnforcement =
+    "STYLE ENFORCEMENT: The final result must match ONLY the requested style materials and rendering. " +
+    "If anything conflicts with the style, remove it.";
+
+  const negBlock = styleNeg
+    ? `STRICT STYLE NEGATIVE: ${styleNeg}`
+    : "";
+
+  return `${base} ${styleEnforcement} ${stylePos} ${globalNegative} ${negBlock}`.trim();
 }
 
 function buildVideoPrompt(userPrompt) {
@@ -67,11 +161,11 @@ function bufferToDataUri(buf, mime) {
   return `data:${mime || "image/png"};base64,${buf.toString("base64")}`;
 }
 
-app.post("/magic", upload.single("image"), async (req,res)=>{
+app.post("/magic", upload.single("image"), async (req, res) => {
   try {
     const file = req.file;
     const styleId = (req.body?.styleId || "").toString().trim();
-    if (!file?.buffer) return res.status(400).json({ ok:false, error:"Missing image" });
+    if (!file?.buffer) return res.status(400).json({ ok: false, error: "Missing image" });
 
     const input = {
       prompt: buildKontextPrompt(styleId),
@@ -79,29 +173,33 @@ app.post("/magic", upload.single("image"), async (req,res)=>{
       aspect_ratio: "match_input_image",
       prompt_upsampling: false,
       output_format: "png",
-      safety_tolerance: 2,
+      safety_tolerance: 2
     };
 
     const r = await fetch("https://api.replicate.com/v1/predictions", {
-      method:"POST",
-      headers:{ Authorization:`Token ${REPLICATE_API_TOKEN}`, "Content-Type":"application/json" },
-      body: JSON.stringify({ version: REPLICATE_IMAGE_VERSION, input }),
+      method: "POST",
+      headers: { Authorization: `Token ${REPLICATE_API_TOKEN}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ version: REPLICATE_IMAGE_VERSION, input })
     });
+
     const pred = await r.json();
     const id = `m_${crypto.randomUUID()}`;
-    magicJobs.set(id, { status:"processing", predId: pred.id, createdAt: Date.now() });
-    return res.status(200).json({ ok:true, id });
-  } catch (e) { return res.status(500).json({ ok:false, error:String(e) }); }
+    magicJobs.set(id, { status: "processing", predId: pred.id, createdAt: Date.now() });
+    return res.status(200).json({ ok: true, id });
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: String(e) });
+  }
 });
 
-app.get("/magic/status", async (req,res)=>{
+app.get("/magic/status", async (req, res) => {
   const id = (req.query?.id || "").toString().trim();
   const job = magicJobs.get(id);
-  if (!job) return res.json({ ok:true, status:"failed", error:"Expired" });
-  if (job.status === "succeeded") return res.json({ ok:true, status:"succeeded", outputUrl: `${req.protocol}://${req.get('host')}/magic/result?id=${id}` });
+  if (!job) return res.json({ ok: true, status: "failed", error: "Expired" });
+  if (job.status === "succeeded")
+    return res.json({ ok: true, status: "succeeded", outputUrl: `${req.protocol}://${req.get("host")}/magic/result?id=${id}` });
 
   const r = await fetch(`https://api.replicate.com/v1/predictions/${job.predId}`, {
-    headers:{ Authorization:`Token ${REPLICATE_API_TOKEN}` },
+    headers: { Authorization: `Token ${REPLICATE_API_TOKEN}` }
   });
   const p = await r.json();
   if (p.status === "succeeded") {
@@ -109,10 +207,14 @@ app.get("/magic/status", async (req,res)=>{
     job.rawUrl = p.output;
     magicJobs.set(id, job);
   }
-  return res.json({ ok:true, status: p.status, outputUrl: p.status === "succeeded" ? `${req.protocol}://${req.get('host')}/magic/result?id=${id}` : null });
+  return res.json({
+    ok: true,
+    status: p.status,
+    outputUrl: p.status === "succeeded" ? `${req.protocol}://${req.get("host")}/magic/result?id=${id}` : null
+  });
 });
 
-app.get("/magic/result", async (req,res)=>{
+app.get("/magic/result", async (req, res) => {
   const id = (req.query?.id || "").toString().trim();
   const job = magicJobs.get(id);
   if (!job || !job.rawUrl) return res.status(404).send("Not ready");
@@ -121,29 +223,31 @@ app.get("/magic/result", async (req,res)=>{
   return res.status(200).send(Buffer.from(await r.arrayBuffer()));
 });
 
-app.post("/video/start", upload.single("image"), async (req,res)=>{
+app.post("/video/start", upload.single("image"), async (req, res) => {
   try {
     const file = req.file;
-    if (!file?.buffer) return res.status(400).json({ ok:false, error:"Missing image" });
+    if (!file?.buffer) return res.status(400).json({ ok: false, error: "Missing image" });
     const prompt = buildVideoPrompt(req.body?.prompt);
     const r = await fetch("https://api.replicate.com/v1/predictions", {
-      method:"POST",
-      headers:{ Authorization:`Token ${REPLICATE_API_TOKEN}`, "Content-Type":"application/json" },
-      body: JSON.stringify({ version: REPLICATE_VIDEO_VERSION, input: { image: bufferToDataUri(file.buffer, file.mimetype), prompt } }),
+      method: "POST",
+      headers: { Authorization: `Token ${REPLICATE_API_TOKEN}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ version: REPLICATE_VIDEO_VERSION, input: { image: bufferToDataUri(file.buffer, file.mimetype), prompt } })
     });
     const pred = await r.json();
-    return res.status(200).json({ ok:true, id: pred.id });
-  } catch (e) { return res.status(500).json({ ok:false, error:String(e) }); }
+    return res.status(200).json({ ok: true, id: pred.id });
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: String(e) });
+  }
 });
 
-app.get("/video/status", async (req,res)=>{
+app.get("/video/status", async (req, res) => {
   const id = (req.query?.id || "").toString().trim();
   const r = await fetch(`https://api.replicate.com/v1/predictions/${id}`, {
-    headers:{ Authorization:`Token ${REPLICATE_API_TOKEN}` },
+    headers: { Authorization: `Token ${REPLICATE_API_TOKEN}` }
   });
   const p = await r.json();
-  return res.json({ ok:true, status: p.status, outputUrl: p.output });
+  return res.json({ ok: true, status: p.status, outputUrl: p.output });
 });
 
-app.get("/", (req,res)=>res.send("DM-2026 Backend Full OK"));
+app.get("/", (req, res) => res.send("DM-2026 Backend Full OK"));
 app.listen(PORT, "0.0.0.0", () => console.log(`✅ ${VERSION} on port ${PORT}`));
