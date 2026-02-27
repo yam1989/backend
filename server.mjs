@@ -17,29 +17,23 @@ const REPLICATE_IMAGE_VERSION = (process.env.REPLICATE_IMAGE_VERSION || "0f1178f
 const REPLICATE_VIDEO_VERSION = (process.env.REPLICATE_VIDEO_VERSION || "").trim();
 
 const styleMap = {
+  // ЭТИ НЕ ТРОГАЕМ (работают хорошо)
   "style_3d_magic": "Transform into a premium Pixar-style 3D animation, Disney character aesthetic, volumetric lighting, masterpiece.",
   "style_blocks": "Lego photography style, made of plastic interlocking bricks, toy world, vibrant colors, studio lighting.",
-  
-  // ПИКСЕЛИ: Жесткое требование квадратных пикселей вместо линий
-  "style_pixels": "Total digital reconstruction. 8-bit retro video game sprite. The monster must be built from LARGE VISIBLE SQUARE BLOCKS. Pixel-perfect mosaic, aliased edges, no smooth lines, no paper texture.",
-  
-  // СКАЗКА: Теперь это классический золотой век Диснея
-  "style_fairy": "Classic Disney 1950s animation style. Hand-painted gouache illustration, golden age of animation, soft magical glow, lush storybook textures, whimsical and high-end masterpiece.",
-  
-  // АНИМЕ: Усиливаем контраст и контуры
-  "style_anime": "High-contrast Japanese anime, Makoto Shinkai aesthetic, heavy cel-shading, sharp ink outlines, vibrant sky background, professional 2D animation look.",
-  
-  // ПЛАСТИЛИН: Делаем формы более грубыми и жирными
-  "style_clay": "Chunky claymation style. Thick plasticine layers, deep fingerprints, glossy clay reflections, handmade toy aesthetic, soft volumetric shapes, stop-motion masterpiece.",
-  
   "style_neon": "Cyberpunk neon glow, futuristic synthwave aesthetic, glowing outlines, high contrast, dark background.",
-  
-  // АКВАРЕЛЬ: Команда на полное уничтожение карандаша водой
-  "style_watercolor": "Professional fluid watercolor art. Extreme paint bleeding, wet-on-wet technique, heavy paper saturation, artistic pigment blooms. NO PENCIL LINES visible, only paint.",
-  
+  "style_comic": "Vintage comic book art, halftone dot patterns, bold black ink outlines, pop art style, vibrant colors.",
   "style_cardboard": "Handmade cardboard craft. The monster must be made of cut-out layered brown corrugated paper. Rough edges, 3D diorama look.",
+
+  // ЭТИ УСИЛИВАЕМ (исправляем)
+  "style_pixels": "ULTRA PIXEL ART. Total digital reconstruction. The creature must be built from LARGE SQUARE PIXELS only. No smooth lines, no pencil strokes, no paper. 8-bit game sprite aesthetic.",
   
-  "style_comic": "Vintage comic book art, halftone dot patterns, bold black ink outlines, pop art style, vibrant colors."
+  "style_fairy": "Masterpiece fairytale illustration. High-end Disney 1950s style. Complete repaint of the character using thick gouache and oil paint. Magical lighting, soft textures, no pencil artifacts.",
+  
+  "style_watercolor": "Professional fluid watercolor painting. Heavy water bleeding, artistic pigment blooms, wet-on-wet technique. MUST hide all original pencil lines under thick layers of paint.",
+  
+  "style_anime": "Japanese anime style, Studio Ghibli vibes, heavy cel-shading, vibrant artistic colors. Stronger emphasis on hand-painted 2D background and character.",
+  
+  "style_clay": "Thick plasticine claymation. Chunky handmade shapes, glossy clay reflections, deep fingerprints. Soft volumetric 3D shapes. Stop-motion film prop look."
 };
 
 function getStyleExtra(styleId) {
