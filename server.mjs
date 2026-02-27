@@ -99,7 +99,7 @@ const styleSpecMap = {
 
   style_cardboard: {
     pos:
-      "Handcrafted corrugated cardboard sculpture. Layered cut-out brown paper sheets. Visible fluted inner texture. " +
+      "Handmade cardboard craft. The monster must be made of cut-out layered brown corrugated paper. Rough edges, 3D diorama look." +
       "Rough torn edges, handmade glue seams. Multi-layer 3D diorama look. Realistic tabletop craft photography.",
     neg:
       "NO watercolor paint. NO glossy plastic. NO LEGO studs. NO voxel blocks. NO neon glow outlines. " +
