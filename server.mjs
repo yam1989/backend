@@ -17,25 +17,28 @@ const REPLICATE_IMAGE_VERSION = (process.env.REPLICATE_IMAGE_VERSION || "0f1178f
 const REPLICATE_VIDEO_VERSION = (process.env.REPLICATE_VIDEO_VERSION || "").trim();
 
 const styleMap = {
-  // ЭТИ НЕ ТРОГАЕМ (работают хорошо)
+  // ЭТИ РАБОТАЮТ ХОРОШО - НЕ ТРОГАЕМ
   "style_3d_magic": "Transform into a premium Pixar-style 3D animation, Disney character aesthetic, volumetric lighting, masterpiece.",
   "style_blocks": "Lego photography style, made of plastic interlocking bricks, toy world, vibrant colors, studio lighting.",
   "style_neon": "Cyberpunk neon glow, futuristic synthwave aesthetic, glowing outlines, high contrast, dark background.",
   "style_comic": "Vintage comic book art, halftone dot patterns, bold black ink outlines, pop art style, vibrant colors.",
   "style_cardboard": "Handmade cardboard craft. The monster must be made of cut-out layered brown corrugated paper. Rough edges, 3D diorama look.",
 
-  // ЭТИ УСИЛИВАЕМ (исправляем)
-  "style_pixels": "Minecraft blocky aesthetic. 3D Voxel art. The monster must be reconstructed entirely from cubic plastic blocks. NO smooth lines, NO pencil, NO paper background. Sharp edges, vibrant solid colors, 8-bit digital world style. Total transformation into a blocky toy character.",
+  // ИСПРАВЛЕННЫЙ ПИКСЕЛЬ (Minecraft Edition)
+  "style_pixels": "Minecraft blocky aesthetic. Total 3D Voxel art reconstruction. The monster MUST be built entirely from cubic plastic blocks. NO smooth lines, NO pencil strokes, NO paper. Every detail is a square block. Vibrant solid colors.",
   
-  "style_fairy": "Masterpiece fairytale illustration. High-end Disney 1950s style. Complete repaint of the character using thick gouache and oil paint. Magical lighting, soft textures, no pencil artifacts.",
+  // ИСПРАВЛЕННОЕ АНИМЕ (Настоящее 2D)
+  "style_anime": "Classic 2D flat cel-shaded anime style. Studio Ghibli aesthetic, bold hand-drawn ink outlines, flat vibrant colors, NO realistic 3D shading, whimsical hand-painted background.",
   
-  "style_watercolor": "Professional fluid watercolor painting. Heavy water bleeding, artistic pigment blooms, wet-on-wet technique. MUST hide all original pencil lines under thick layers of paint.",
+  // ИСПРАВЛЕННАЯ СКАЗКА (Disney)
+  "style_fairy": "Golden age of Disney animation (1950s). Hand-painted gouache illustration, magical glow, soft storybook textures, high-end masterpiece. Complete repaint of the creature.",
   
-  "style_anime": "Japanese anime style, Studio Ghibli vibes, heavy cel-shading, vibrant artistic colors. Stronger emphasis on hand-painted 2D background and character.",
+  // ИСПРАВЛЕННАЯ АКВАРЕЛЬ (Без карандаша)
+  "style_watercolor": "Professional fluid watercolor painting. Heavy paint bleeding, wet-on-wet technique, artistic pigment blooms. MUST hide all pencil lines and handwriting under thick paint layers.",
   
-  "style_clay": "Thick plasticine claymation. Chunky handmade shapes, glossy clay reflections, deep fingerprints. Soft volumetric 3D shapes. Stop-motion film prop look."
+  // ИСПРАВЛЕННЫЙ ПЛАСТИЛИН (Более жирный)
+  "style_clay": "Ultra-thick plasticine claymation. Chunky handmade shapes, deep fingerprints, glossy clay reflections, soft volumetric 3D shapes, stop-motion film prop aesthetic."
 };
-
 function getStyleExtra(styleId) {
   return styleMap[styleId] || "Transform into a premium 3D cartoon illustration.";
 }
