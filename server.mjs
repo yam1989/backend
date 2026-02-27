@@ -83,19 +83,22 @@ const styleSpecMap = {
       "NO clay fingerprints. NO voxel Minecraft blocks. NO soft Disney 1950s storybook paint."
   },
 
-  // ✅  Масляные краски (усиленная)
-    style_watercolor: {
+    // 🎨 МЯГКАЯ ДЕТСКАЯ МАСЛЯНАЯ ЖИВОПИСЬ
+  style_watercolor: {
     pos:
-      "Classical fine art oil painting on canvas. Thick impasto brush strokes. " +
-      "Visible textured oil paint layers. Rich pigment density. " +
-      "Heavy palette knife strokes. Painterly depth and dramatic lighting. " +
-      "Canvas fabric texture visible. Strong contrast between light and shadow. " +
-      "Art gallery masterpiece style. Completely repaint from scratch in oil paint. " +
-      "Ignore original crayon texture. Replace all lines with expressive brushwork.",
+      "Soft children's oil painting on canvas. " +
+      "Thick but gentle impasto brush strokes. " +
+      "Creamy blended oil paint texture. " +
+      "Warm pastel oil palette. " +
+      "Visible canvas fabric texture. " +
+      "Rounded soft edges. " +
+      "Painterly depth with soft light and shadow. " +
+      "Completely repaint from scratch in oil paint. " +
+      "Replace all original lines with expressive brushwork.",
     neg:
-      "NO watercolor bleeding. NO paper texture. NO pencil lines. NO vector outlines. " +
-      "NO flat cel shading. NO LEGO plastic. NO voxel blocks. NO halftone comic dots. " +
-      "NO neon glow outlines."
+      "NO watercolor bleeding. NO paper texture. NO pencil lines. " +
+      "NO crisp black outlines. NO vector style. " +
+      "NO LEGO plastic. NO voxel blocks. NO halftone comic dots."
   },
 
   style_cardboard: {
