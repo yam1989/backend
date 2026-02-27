@@ -1,21 +1,23 @@
 // DM-2026 backend — Cloud Run (Node 20 + Express)
 // ✅ ПОЛНАЯ ВЕРСИЯ: ФОТО (10 СТИЛЕЙ) + ВИДЕО (WAN 2.2)
-// ✅ ДОБАВЛЕН PROMPT_STRENGTH: 0.95 ДЛЯ УДАЛЕНИЯ КАРАНДАША
+// ✅ ИСПРАВЛЕНА АКВАРЕЛЬ: ГИБКИЕ НАСТРОЙКИ ДЛЯ УДАЛЕНИЯ КАРАНДАША
 
 import express from "express";
 import multer from "multer";
 import crypto from "crypto";
 
-const VERSION = "DM-2026 FULL v15.0 (PROMPT_STRENGTH FIX)";
+const VERSION = "DM-2026 FULL v16.0 (FINAL WATERCOLOR FIX)";
 
 const app = express();
 app.disable("x-powered-by");
 const PORT = parseInt(process.env.PORT || "8080", 10);
 
+// Переменные окружения (Replicate)
 const REPLICATE_API_TOKEN = process.env.REPLICATE_API_TOKEN || "";
 const REPLICATE_IMAGE_VERSION = (process.env.REPLICATE_IMAGE_VERSION || "0f1178f5a27e9aa2d2d39c8a43c110f7fa7cbf64062ff04a04cd40899e546065").trim();
 const REPLICATE_VIDEO_VERSION = (process.env.REPLICATE_VIDEO_VERSION || "").trim();
 
+// --- КАРТА СТИЛЕЙ (ПРОМПТЫ) ---
 const styleMap = {
   "style_3d_magic": "Transform into a premium Pixar-style 3D animation, Disney character aesthetic, volumetric lighting, masterpiece.",
   "style_blocks": "Lego photography style, made of plastic interlocking bricks, toy world, vibrant colors, studio lighting.",
@@ -27,7 +29,7 @@ const styleMap = {
   "style_fairy": "Golden age of Disney animation (1950s). Hand-painted gouache illustration, magical glow, soft storybook textures, high-end masterpiece. Character must be fully repainted, ignore pencil lines.",
   "style_clay": "Ultra-thick plasticine claymation. Chunky handmade shapes, deep fingerprints, glossy clay reflections, soft volumetric 3D shapes, stop-motion film prop aesthetic.",
   
-  // ЭКСТРЕМАЛЬНАЯ АКВАРЕЛЬ
+  // ЭКСТРЕМАЛЬНАЯ АКВАРЕЛЬ (БЕЗ КАРАНДАША)
   "style_watercolor": "Professional abstract fluid watercolor art on CLEAN WHITE paper. EXTREME paint bleeding, heavy water drops, artistic pigment blooms. THE CREATURE MUST BE FULLY REPAINTED. ABSOLUTELY NO PENCIL LINES, NO PEN, NO BLACK OUTLINES. Masterpiece gallery quality."
 };
 
@@ -37,8 +39,8 @@ function getStyleExtra(styleId) {
 
 function buildKontextPrompt(styleId) {
   const base = 
-    "Masterpiece art transformation. Convert the child's drawing into a high-end, colorful illustration. " +
-    "STRICT: Keep original composition. Do NOT zoom. Do NOT crop. " +
+    "Masterpiece art transformation. Convert the child's drawing into a high-end illustration. " +
+    "STRICT: Keep original composition. Do NOT zoom. " +
     "Maintain the shapes but TOTALLY change the texture. Remove all paper artifacts, handwriting, and pencil lines. " +
     "Professional commercial artwork look.";
   return `${base} ${getStyleExtra(styleId)}`.trim();
@@ -68,11 +70,11 @@ app.post("/magic", upload.single("image"), async (req,res)=>{
       prompt: buildKontextPrompt(styleId),
       input_image: bufferToDataUri(file.buffer, file.mimetype),
       aspect_ratio: "match_input_image",
-      prompt_upsampling: false,
       output_format: "png",
-      safety_tolerance: 2,
-      // ВАЖНО: Усиливаем влияние промпта, чтобы стереть карандаш
-      prompt_strength: 0.95, 
+      safety_tolerance: 5,           // Повышаем свободу творчества
+      prompt_upsampling: true,       // ИИ сам улучшает детали стиля
+      prompt_strength: 0.85,         // Оптимальный баланс для удаления линий
+      guidance: 7.5                  // Усиливаем влияние текста на картинку
     };
 
     const r = await fetch("https://api.replicate.com/v1/predictions", {
@@ -139,5 +141,5 @@ app.get("/video/status", async (req,res)=>{
   return res.json({ ok:true, status: p.status, outputUrl: p.output });
 });
 
-app.get("/", (req,res)=>res.send("DM-2026 Backend Full OK (v15.0)"));
+app.get("/", (req,res)=>res.send("DM-2026 Backend Full OK (v16.0)"));
 app.listen(PORT, "0.0.0.0", () => console.log(`✅ ${VERSION} on port ${PORT}`));
