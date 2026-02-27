@@ -1,39 +1,44 @@
 // DM-2026 backend — Cloud Run (Node 20 + Express)
-// ✅ ПОЛНАЯ ВЕРСИЯ: ФОТО (10 СТИЛЕЙ) + ВИДЕО (WAN 2.2)
-// ✅ СТИЛИ: АКВАРЕЛЬ (ULTRA), ПИКСЕЛЬ (MINECRAFT), СКАЗКА (DISNEY)
+// ✅ ВСЕ ФУНКЦИИ (ВИДЕО + ФОТО) СОХРАНЕНЫ
+// ✅ ПРОМПТЫ УСИЛЕНЫ: АКВАРЕЛЬ, ПИКСЕЛЬ (MINECRAFT), СКАЗКА
 
 import express from "express";
 import multer from "multer";
 import crypto from "crypto";
 
-const VERSION = "DM-2026 FULL v14.0 (VIDEO + ULTRA PROMPTS)";
+const VERSION = "DM-2026 FULL v12.0 (FINAL STYLE TUNING)";
 
 const app = express();
 app.disable("x-powered-by");
 const PORT = parseInt(process.env.PORT || "8080", 10);
 
-// Переменные окружения (Replicate)
 const REPLICATE_API_TOKEN = process.env.REPLICATE_API_TOKEN || "";
 const REPLICATE_IMAGE_VERSION = (process.env.REPLICATE_IMAGE_VERSION || "0f1178f5a27e9aa2d2d39c8a43c110f7fa7cbf64062ff04a04cd40899e546065").trim();
 const REPLICATE_VIDEO_VERSION = (process.env.REPLICATE_VIDEO_VERSION || "").trim();
 
-// --- КАРТА СТИЛЕЙ (ПРОМПТЫ) ---
+// --- ОБНОВЛЕННЫЙ СЛОВАРЬ СТИЛЕЙ ---
 const styleMap = {
-  // РАБОТАЮТ ХОРОШО
+  // ЭТИ РАБОТАЮТ ХОРОШО - НЕ ТРОГАЕМ
   "style_3d_magic": "Transform into a premium Pixar-style 3D animation, Disney character aesthetic, volumetric lighting, masterpiece.",
   "style_blocks": "Lego photography style, made of plastic interlocking bricks, toy world, vibrant colors, studio lighting.",
   "style_neon": "Cyberpunk neon glow, futuristic synthwave aesthetic, glowing outlines, high contrast, dark background.",
   "style_comic": "Vintage comic book art, halftone dot patterns, bold black ink outlines, pop art style, vibrant colors.",
   "style_cardboard": "Handmade cardboard craft. The monster must be made of cut-out layered brown corrugated paper. Rough edges, 3D diorama look.",
 
-  // УСИЛЕННЫЕ И ИСПРАВЛЕННЫЕ
+  // ИСПРАВЛЕННЫЙ ПИКСЕЛЬ (Minecraft Edition)
   "style_pixels": "Minecraft blocky aesthetic. Total 3D Voxel art reconstruction. The monster MUST be built entirely from CUBIC BLOCKS. NO smooth lines, NO pencil strokes, NO paper. Every detail is a pixel-perfect square block. Vibrant solid colors.",
-  "style_anime": "Classic 2D flat cel-shaded anime style. Studio Ghibli aesthetic, bold hand-drawn ink outlines, flat vibrant colors, NO 3D shading, whimsical hand-painted background.",
-  "style_fairy": "Golden age of Disney animation (1950s). Hand-painted gouache illustration, magical glow, soft storybook textures, high-end masterpiece. Character must be fully repainted, ignore pencil lines.",
-  "style_clay": "Ultra-thick plasticine claymation. Chunky handmade shapes, deep fingerprints, glossy clay reflections, soft volumetric 3D shapes, stop-motion film prop aesthetic.",
   
-  // ЭКСТРЕМАЛЬНАЯ АКВАРЕЛЬ (БЕЗ КАРАНДАША)
-  "style_watercolor": "Professional abstract fluid watercolor art on CLEAN WHITE paper. EXTREME paint bleeding, heavy water drops, artistic pigment blooms. THE CREATURE MUST BE FULLY REPAINTED. ABSOLUTELY NO PENCIL LINES, NO PEN, NO BLACK OUTLINES. The character is made only of soft colored water stains and wet paint splatters. Masterpiece gallery quality."
+  // ИСПРАВЛЕННОЕ АНИМЕ (Настоящее 2D)
+  "style_anime": "Classic 2D flat cel-shaded anime style. Studio Ghibli aesthetic, bold hand-drawn ink outlines, flat vibrant colors, NO 3D shading, whimsical hand-painted background.",
+  
+  // ИСПРАВЛЕННАЯ СКАЗКА (Disney Classic)
+  "style_fairy": "Golden age of Disney animation (1950s). Hand-painted gouache illustration, magical glow, soft storybook textures, high-end masterpiece. Character must be fully repainted, ignore pencil lines.",
+  
+  // ИСПРАВЛЕННАЯ АКВАРЕЛЬ (Максимальное усиление)
+  "style_watercolor": "Professional fluid watercolor painting. EXTREME paint bleeding, wet-on-wet technique, artistic pigment blooms, heavy water saturation. MUST HIDE ALL ORIGINAL PENCIL LINES and handwriting under layers of paint. Masterpiece fluid art.",
+  
+  // ИСПРАВЛЕННЫЙ ПЛАСТИЛИН (Более жирный)
+  "style_clay": "Ultra-thick plasticine claymation. Chunky handmade shapes, deep fingerprints, glossy clay reflections, soft volumetric 3D shapes, stop-motion film prop aesthetic."
 };
 
 function getStyleExtra(styleId) {
@@ -62,7 +67,6 @@ function bufferToDataUri(buf, mime) {
   return `data:${mime || "image/png"};base64,${buf.toString("base64")}`;
 }
 
-// --- IMAGE ENDPOINTS ---
 app.post("/magic", upload.single("image"), async (req,res)=>{
   try {
     const file = req.file;
@@ -117,7 +121,6 @@ app.get("/magic/result", async (req,res)=>{
   return res.status(200).send(Buffer.from(await r.arrayBuffer()));
 });
 
-// --- VIDEO ENDPOINTS ---
 app.post("/video/start", upload.single("image"), async (req,res)=>{
   try {
     const file = req.file;
@@ -142,5 +145,5 @@ app.get("/video/status", async (req,res)=>{
   return res.json({ ok:true, status: p.status, outputUrl: p.output });
 });
 
-app.get("/", (req,res)=>res.send("DM-2026 Backend Full OK (v14.0)"));
+app.get("/", (req,res)=>res.send("DM-2026 Backend Full OK"));
 app.listen(PORT, "0.0.0.0", () => console.log(`✅ ${VERSION} on port ${PORT}`));
