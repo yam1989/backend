@@ -20,7 +20,7 @@ const REPLICATE_VIDEO_VERSION = (process.env.REPLICATE_VIDEO_VERSION || "").trim
 const styleMap = {
   "style_3d_magic": "Transform into a premium Pixar-style 3D animation, Disney character aesthetic, volumetric lighting, masterpiece.",
   "style_blocks": "Lego photography style, made of plastic interlocking bricks, toy world, vibrant colors, studio lighting.",
-  "style_pixels": "High-quality 128-bit pixel art, sharp retro game aesthetic, vibrant colors, clear sprite outlines.",
+  "style_pixels": "Extremely sharp 128-bit pixel art style. Total transformation. Every part of the monster must be made of visible, large square pixels. NO HANDWRITING, NO TEXT. Pure digital sprite aesthetic. Solid vibrant colors.",
   "style_fairy": "Fairytale storybook illustration, glowing magic aura, soft oil painting, warm golden lighting, enchanted forest.",
   "style_anime": "Studio Ghibli style, Hayao Miyazaki aesthetic, hand-painted anime art, lush environment, whimsical.",
   "style_clay": "Claymation style, handcrafted plasticine monster, stop-motion aesthetic, fingerprints texture, soft clay surface.",
