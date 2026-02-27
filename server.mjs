@@ -19,14 +19,27 @@ const REPLICATE_VIDEO_VERSION = (process.env.REPLICATE_VIDEO_VERSION || "").trim
 const styleMap = {
   "style_3d_magic": "Transform into a premium Pixar-style 3D animation, Disney character aesthetic, volumetric lighting, masterpiece.",
   "style_blocks": "Lego photography style, made of plastic interlocking bricks, toy world, vibrant colors, studio lighting.",
-  "style_pixels": "Total transformation into sharp 128-bit pixel art sprite. The creature MUST be made of visible large square pixels. NO PAPER, NO TEXT, NO HANDWRITING. Pure digital game aesthetic.",
-  "style_fairy": "Fairytale storybook style. Complete repaint of the monster as a soft oil-painted magical creature. Ethereal glow, warm magical lighting. Focus on creature, ignore paper background.",
-  "style_anime": "Hand-drawn Japanese anime style, Studio Ghibli aesthetic, flat cel-shading, bold artistic lines, whimsical atmosphere.",
-  "style_clay": "Real claymation style. The monster must be made of handmade plasticine. Visible fingerprints, soft clay texture, stop-motion movie prop look, volumetric shapes.",
+  
+  // ПИКСЕЛИ: Жесткое требование квадратных пикселей вместо линий
+  "style_pixels": "Total digital reconstruction. 8-bit retro video game sprite. The monster must be built from LARGE VISIBLE SQUARE BLOCKS. Pixel-perfect mosaic, aliased edges, no smooth lines, no paper texture.",
+  
+  // СКАЗКА: Теперь это классический золотой век Диснея
+  "style_fairy": "Classic Disney 1950s animation style. Hand-painted gouache illustration, golden age of animation, soft magical glow, lush storybook textures, whimsical and high-end masterpiece.",
+  
+  // АНИМЕ: Усиливаем контраст и контуры
+  "style_anime": "High-contrast Japanese anime, Makoto Shinkai aesthetic, heavy cel-shading, sharp ink outlines, vibrant sky background, professional 2D animation look.",
+  
+  // ПЛАСТИЛИН: Делаем формы более грубыми и жирными
+  "style_clay": "Chunky claymation style. Thick plasticine layers, deep fingerprints, glossy clay reflections, handmade toy aesthetic, soft volumetric shapes, stop-motion masterpiece.",
+  
   "style_neon": "Cyberpunk neon glow, futuristic synthwave aesthetic, glowing outlines, high contrast, dark background.",
-  "style_watercolor": "Artistic watercolor painting on wet paper. Soft bleeding edges, elegant ink splatters, artistic brush strokes. Complete repaint, ignore pencil lines and paper texture.",
-  "style_cardboard": "Handmade cardboard craft. The monster must be made of cut-out layered brown corrugated paper. Rough edges, 3D diorama look, papercraft masterpiece.",
-  "style_comic": "Vintage comic book art, halftone dot patterns, bold black ink outlines, pop art style, vibrant colors, retro ink aesthetic."
+  
+  // АКВАРЕЛЬ: Команда на полное уничтожение карандаша водой
+  "style_watercolor": "Professional fluid watercolor art. Extreme paint bleeding, wet-on-wet technique, heavy paper saturation, artistic pigment blooms. NO PENCIL LINES visible, only paint.",
+  
+  "style_cardboard": "Handmade cardboard craft. The monster must be made of cut-out layered brown corrugated paper. Rough edges, 3D diorama look.",
+  
+  "style_comic": "Vintage comic book art, halftone dot patterns, bold black ink outlines, pop art style, vibrant colors."
 };
 
 function getStyleExtra(styleId) {
