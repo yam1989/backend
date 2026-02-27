@@ -13,7 +13,8 @@ app.disable("x-powered-by");
 const PORT = parseInt(process.env.PORT || "8080", 10);
 
 const REPLICATE_API_TOKEN = process.env.REPLICATE_API_TOKEN || "";
-const REPLICATE_IMAGE_VERSION = (process.env.REPLICATE_IMAGE_VERSION || "0f1178f5a27e9aa2d2d39c8a43c110f7fa7cbf64062ff04a04cd40899e546065").trim();
+const REPLICATE_IMAGE_VERSION = (process.env.REPLICATE_IMAGE_VERSION ||
+  "0f1178f5a27e9aa2d2d39c8a43c110f7fa7cbf64062ff04a04cd40899e546065").trim();
 const REPLICATE_VIDEO_VERSION = (process.env.REPLICATE_VIDEO_VERSION || "").trim();
 
 // --- ОБНОВЛЕННЫЙ СЛОВАРЬ СТИЛЕЙ (POS + NEG) ---
@@ -75,14 +76,15 @@ const styleSpecMap = {
 
   style_neon: {
     pos:
-      "Futuristic cyber-neon transformation. Dark background, intense glowing cyan/magenta/lime accents. " +
+      "Cyberpunk neon glow, futuristic synthwave aesthetic, glowing outlines, high contrast, dark background." +
       "Bright luminous outlines tracing silhouette, holographic glow, subtle glitch energy. High contrast, reflective surface.",
     neg:
       "NO watercolor. NO paper texture. NO pencil lines. NO LEGO. NO cardboard craft. NO halftone comic print. " +
       "NO clay fingerprints. NO voxel Minecraft blocks. NO soft Disney 1950s storybook paint."
   },
 
-   style_watercolor: {
+  // ✅ АКВАРЕЛЬ (усиленная)
+  style_watercolor: {
     pos:
       "Traditional fine art watercolor painting on textured cotton paper. " +
       "Heavy wet-on-wet technique with strong pigment diffusion and natural color bleeding. " +
@@ -99,7 +101,7 @@ const styleSpecMap = {
 
   style_cardboard: {
     pos:
-      "Handmade cardboard craft. The monster must be made of cut-out layered brown corrugated paper. Rough edges, 3D diorama look." +
+      "Handcrafted corrugated cardboard sculpture. Layered cut-out brown paper sheets. Visible fluted inner texture. " +
       "Rough torn edges, handmade glue seams. Multi-layer 3D diorama look. Realistic tabletop craft photography.",
     neg:
       "NO watercolor paint. NO glossy plastic. NO LEGO studs. NO voxel blocks. NO neon glow outlines. " +
@@ -126,8 +128,11 @@ function getStyleNegative(styleId) {
   return styleSpecMap[k]?.neg || "";
 }
 
+// ✅ ИЗМЕНЕНО ТОЛЬКО ДЛЯ АКВАРЕЛИ: убрали конфликт "no paper" vs "watercolor paper"
 function buildKontextPrompt(styleId) {
-  const base =
+  const sid = String(styleId || "").trim();
+
+  const baseGeneric =
     "Masterpiece art transformation. Convert the child's drawing into a high-end, colorful illustration. " +
     "STRICT: Keep original composition. Do NOT zoom. Do NOT crop. Do NOT rotate. Keep full character in frame. " +
     "Maintain the original silhouette and pose but TOTALLY replace materials/texture in the target style. " +
@@ -135,21 +140,36 @@ function buildKontextPrompt(styleId) {
     "No frames, no borders, no UI, no stickers, no watermark, no text. " +
     "Professional commercial artwork look. Clean output.";
 
-  const globalNegative =
+  const baseWatercolor =
+    "Masterpiece art transformation. Convert the child's drawing into a high-end watercolor painting. " +
+    "STRICT: Keep original composition. Do NOT zoom. Do NOT crop. Do NOT rotate. Keep full character in frame. " +
+    "Maintain the original silhouette and pose but TOTALLY repaint in watercolor. " +
+    "REMOVE notebook/photo artifacts, remove graphite/pencil and handwriting, but render on watercolor paper texture. " +
+    "No frames, no borders, no UI, no stickers, no watermark, no text. " +
+    "Fine art watercolor look. Clean output.";
+
+  const globalNegativeGeneric =
     "STRICT NEGATIVE: no photo of paper, no notebook background, no graphite, no sketch lines, " +
     "no blur crop, no cut-off body parts, no extra limbs, no duplicated faces, no extra characters, " +
     "no random objects, no text, no logos, no watermarks.";
 
-  const stylePos = getStyleExtra(styleId);
-  const styleNeg = getStyleNegative(styleId);
+  const globalNegativeWatercolor =
+    "STRICT NEGATIVE: no notebook lines, no ruled paper, no photo glare, no camera shadows, " +
+    "no graphite, no sketch lines, no handwriting, " +
+    "no blur crop, no cut-off body parts, no extra limbs, no duplicated faces, no extra characters, " +
+    "no random objects, no text, no logos, no watermarks.";
+
+  const stylePos = getStyleExtra(sid);
+  const styleNeg = getStyleNegative(sid);
 
   const styleEnforcement =
     "STYLE ENFORCEMENT: The final result must match ONLY the requested style materials and rendering. " +
     "If anything conflicts with the style, remove it.";
 
-  const negBlock = styleNeg
-    ? `STRICT STYLE NEGATIVE: ${styleNeg}`
-    : "";
+  const negBlock = styleNeg ? `STRICT STYLE NEGATIVE: ${styleNeg}` : "";
+
+  const base = sid === "style_watercolor" ? baseWatercolor : baseGeneric;
+  const globalNegative = sid === "style_watercolor" ? globalNegativeWatercolor : globalNegativeGeneric;
 
   return `${base} ${styleEnforcement} ${stylePos} ${globalNegative} ${negBlock}`.trim();
 }
