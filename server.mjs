@@ -1,76 +1,81 @@
-// DM-2026 backend — v18.0 (PER-STYLE BALANCING)
+// DM-2026 backend — Cloud Run (Node 20 + Express)
+// ✅ ПОЛНАЯ ВЕРСИЯ: ФОТО (10 СТИЛЕЙ) + ВИДЕО (WAN 2.2)
+// ✅ СТИЛИ: АКВАРЕЛЬ (ULTRA), ПИКСЕЛЬ (MINECRAFT), СКАЗКА (DISNEY)
+
 import express from "express";
 import multer from "multer";
 import crypto from "crypto";
 
-const VERSION = "DM-2026 FULL v18.0 (BALANCE FIX)";
+const VERSION = "DM-2026 FULL v14.0 (VIDEO + ULTRA PROMPTS)";
+
 const app = express();
 app.disable("x-powered-by");
 const PORT = parseInt(process.env.PORT || "8080", 10);
 
+// Переменные окружения (Replicate)
 const REPLICATE_API_TOKEN = process.env.REPLICATE_API_TOKEN || "";
 const REPLICATE_IMAGE_VERSION = (process.env.REPLICATE_IMAGE_VERSION || "0f1178f5a27e9aa2d2d39c8a43c110f7fa7cbf64062ff04a04cd40899e546065").trim();
 const REPLICATE_VIDEO_VERSION = (process.env.REPLICATE_VIDEO_VERSION || "").trim();
 
-// --- ТОЧНЫЕ НАСТРОЙКИ ДЛЯ КАЖДОГО СТИЛЯ ---
-const styleConfigs = {
-  // Акварель требует максимума, чтобы стереть карандаш
-  "style_watercolor": { strength: 0.95, guidance: 10.0, upsampling: true }, 
-  // Пиксели должны быть жестко кубическими
-  "style_pixels":     { strength: 0.90, guidance: 8.0,  upsampling: true },
-  // Остальные стили возвращаем к рабочим настройкам (чтобы не теряли силу)
-  "style_3d_magic":   { strength: 0.70, guidance: 7.0,  upsampling: false },
-  "style_blocks":     { strength: 0.75, guidance: 7.0,  upsampling: false },
-  "style_neon":       { strength: 0.75, guidance: 7.5,  upsampling: false },
-  "style_comic":      { strength: 0.75, guidance: 7.5,  upsampling: false },
-  "style_cardboard":  { strength: 0.80, guidance: 7.0,  upsampling: false },
-  "style_anime":      { strength: 0.80, guidance: 7.5,  upsampling: true },
-  "style_fairy":      { strength: 0.85, guidance: 8.0,  upsampling: true },
-  "style_clay":       { strength: 0.85, guidance: 7.5,  upsampling: true },
-  "default":          { strength: 0.75, guidance: 7.5,  upsampling: false }
-};
-
+// --- КАРТА СТИЛЕЙ (ПРОМПТЫ) ---
 const styleMap = {
+  // РАБОТАЮТ ХОРОШО
   "style_3d_magic": "Transform into a premium Pixar-style 3D animation, Disney character aesthetic, volumetric lighting, masterpiece.",
   "style_blocks": "Lego photography style, made of plastic interlocking bricks, toy world, vibrant colors, studio lighting.",
   "style_neon": "Cyberpunk neon glow, futuristic synthwave aesthetic, glowing outlines, high contrast, dark background.",
   "style_comic": "Vintage comic book art, halftone dot patterns, bold black ink outlines, pop art style, vibrant colors.",
   "style_cardboard": "Handmade cardboard craft. The monster must be made of cut-out layered brown corrugated paper. Rough edges, 3D diorama look.",
-  "style_pixels": "Minecraft blocky aesthetic. Total 3D Voxel art reconstruction. The monster MUST be built entirely from CUBIC BLOCKS. NO smooth lines, NO pencil, NO paper.",
-  "style_anime": "Classic 2D flat cel-shaded anime style. Studio Ghibli aesthetic, bold hand-drawn ink outlines, flat vibrant colors.",
-  "style_fairy": "Golden age of Disney animation (1950s). Hand-painted gouache illustration, magical glow, soft storybook textures.",
-  "style_clay": "Ultra-thick plasticine claymation. Chunky handmade shapes, deep fingerprints, glossy clay reflections.",
-  "style_watercolor": "Professional abstract fluid watercolor art on CLEAN WHITE paper. EXTREME paint bleeding, heavy water drops, artistic pigment blooms. ABSOLUTELY NO PENCIL LINES."
+
+  // УСИЛЕННЫЕ И ИСПРАВЛЕННЫЕ
+  "style_pixels": "Minecraft blocky aesthetic. Total 3D Voxel art reconstruction. The monster MUST be built entirely from CUBIC BLOCKS. NO smooth lines, NO pencil strokes, NO paper. Every detail is a pixel-perfect square block. Vibrant solid colors.",
+  "style_anime": "Classic 2D flat cel-shaded anime style. Studio Ghibli aesthetic, bold hand-drawn ink outlines, flat vibrant colors, NO 3D shading, whimsical hand-painted background.",
+  "style_fairy": "Golden age of Disney animation (1950s). Hand-painted gouache illustration, magical glow, soft storybook textures, high-end masterpiece. Character must be fully repainted, ignore pencil lines.",
+  "style_clay": "Ultra-thick plasticine claymation. Chunky handmade shapes, deep fingerprints, glossy clay reflections, soft volumetric 3D shapes, stop-motion film prop aesthetic.",
+  
+  // ЭКСТРЕМАЛЬНАЯ АКВАРЕЛЬ (БЕЗ КАРАНДАША)
+  "style_watercolor": "Professional abstract fluid watercolor art on CLEAN WHITE paper. EXTREME paint bleeding, heavy water drops, artistic pigment blooms. THE CREATURE MUST BE FULLY REPAINTED. ABSOLUTELY NO PENCIL LINES, NO PEN, NO BLACK OUTLINES. The character is made only of soft colored water stains and wet paint splatters. Masterpiece gallery quality."
 };
 
+function getStyleExtra(styleId) {
+  return styleMap[styleId] || "Transform into a premium 3D cartoon illustration.";
+}
+
 function buildKontextPrompt(styleId) {
-  const base = "Masterpiece art transformation. Convert the child's drawing into a high-end illustration. STRICT: Keep original composition. Remove all paper artifacts and pencil lines.";
-  return `${base} ${styleMap[styleId] || ""}`.trim();
+  const base = 
+    "Masterpiece art transformation. Convert the child's drawing into a high-end, colorful illustration. " +
+    "STRICT: Keep original composition. Do NOT zoom. Do NOT crop. " +
+    "Maintain the shapes but TOTALLY change the texture. Remove all paper artifacts, handwriting, and pencil lines. " +
+    "Professional commercial artwork look.";
+  return `${base} ${getStyleExtra(styleId)}`.trim();
+}
+
+function buildVideoPrompt(userPrompt) {
+  const p = String(userPrompt || "").trim();
+  if (p) return p;
+  return `Animate ALL existing objects in the drawing. Smooth, premium Pixar-style animation. Soft dimensional lighting. No new objects.`;
 }
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
 const magicJobs = new Map();
 
-function bufferToDataUri(buf, mime) { return `data:${mime || "image/png"};base64,${buf.toString("base64")}`; }
+function bufferToDataUri(buf, mime) {
+  return `data:${mime || "image/png"};base64,${buf.toString("base64")}`;
+}
 
+// --- IMAGE ENDPOINTS ---
 app.post("/magic", upload.single("image"), async (req,res)=>{
   try {
     const file = req.file;
     const styleId = (req.body?.styleId || "").toString().trim();
     if (!file?.buffer) return res.status(400).json({ ok:false, error:"Missing image" });
 
-    // ПРИМЕНЯЕМ ИНДИВИДУАЛЬНУЮ КОНФИГУРАЦИЮ
-    const cfg = styleConfigs[styleId] || styleConfigs["default"];
-
     const input = {
       prompt: buildKontextPrompt(styleId),
       input_image: bufferToDataUri(file.buffer, file.mimetype),
       aspect_ratio: "match_input_image",
+      prompt_upsampling: false,
       output_format: "png",
       safety_tolerance: 2,
-      prompt_strength: cfg.strength,
-      guidance: cfg.guidance,
-      prompt_upsampling: cfg.upsampling
     };
 
     const r = await fetch("https://api.replicate.com/v1/predictions", {
@@ -85,46 +90,57 @@ app.post("/magic", upload.single("image"), async (req,res)=>{
   } catch (e) { return res.status(500).json({ ok:false, error:String(e) }); }
 });
 
-// --- СТАНДАРТНЫЕ МЕТОДЫ (СТАТУС, РЕЗУЛЬТАТ, ВИДЕО) ---
 app.get("/magic/status", async (req,res)=>{
   const id = (req.query?.id || "").toString().trim();
   const job = magicJobs.get(id);
-  if (!job) return res.json({ ok:true, status:"failed" });
+  if (!job) return res.json({ ok:true, status:"failed", error:"Expired" });
   if (job.status === "succeeded") return res.json({ ok:true, status:"succeeded", outputUrl: `${req.protocol}://${req.get('host')}/magic/result?id=${id}` });
-  const r = await fetch(`https://api.replicate.com/v1/predictions/${job.predId}`, { headers:{ Authorization:`Token ${REPLICATE_API_TOKEN}` } });
+
+  const r = await fetch(`https://api.replicate.com/v1/predictions/${job.predId}`, {
+    headers:{ Authorization:`Token ${REPLICATE_API_TOKEN}` },
+  });
   const p = await r.json();
-  if (p.status === "succeeded") { job.status = "succeeded"; job.rawUrl = p.output; magicJobs.set(id, job); }
+  if (p.status === "succeeded") {
+    job.status = "succeeded";
+    job.rawUrl = p.output;
+    magicJobs.set(id, job);
+  }
   return res.json({ ok:true, status: p.status, outputUrl: p.status === "succeeded" ? `${req.protocol}://${req.get('host')}/magic/result?id=${id}` : null });
 });
 
 app.get("/magic/result", async (req,res)=>{
   const id = (req.query?.id || "").toString().trim();
   const job = magicJobs.get(id);
-  if (!job?.rawUrl) return res.status(404).send("Not ready");
+  if (!job || !job.rawUrl) return res.status(404).send("Not ready");
   const r = await fetch(job.rawUrl);
   res.setHeader("Content-Type", "image/png");
   return res.status(200).send(Buffer.from(await r.arrayBuffer()));
 });
 
+// --- VIDEO ENDPOINTS ---
 app.post("/video/start", upload.single("image"), async (req,res)=>{
   try {
     const file = req.file;
-    if (!file?.buffer) return res.status(400).json({ ok:false });
+    if (!file?.buffer) return res.status(400).json({ ok:false, error:"Missing image" });
+    const prompt = buildVideoPrompt(req.body?.prompt);
     const r = await fetch("https://api.replicate.com/v1/predictions", {
       method:"POST",
       headers:{ Authorization:`Token ${REPLICATE_API_TOKEN}`, "Content-Type":"application/json" },
-      body: JSON.stringify({ version: REPLICATE_VIDEO_VERSION, input: { image: bufferToDataUri(file.buffer, file.mimetype), prompt: "Animate objects smoothly." } }),
+      body: JSON.stringify({ version: REPLICATE_VIDEO_VERSION, input: { image: bufferToDataUri(file.buffer, file.mimetype), prompt } }),
     });
     const pred = await r.json();
     return res.status(200).json({ ok:true, id: pred.id });
-  } catch (e) { return res.status(500).json({ ok:false }); }
+  } catch (e) { return res.status(500).json({ ok:false, error:String(e) }); }
 });
 
 app.get("/video/status", async (req,res)=>{
-  const r = await fetch(`https://api.replicate.com/v1/predictions/${req.query.id}`, { headers:{ Authorization:`Token ${REPLICATE_API_TOKEN}` } });
+  const id = (req.query?.id || "").toString().trim();
+  const r = await fetch(`https://api.replicate.com/v1/predictions/${id}`, {
+    headers:{ Authorization:`Token ${REPLICATE_API_TOKEN}` },
+  });
   const p = await r.json();
   return res.json({ ok:true, status: p.status, outputUrl: p.output });
 });
 
-app.get("/", (req,res)=>res.send("DM-2026 Backend v18.0 (Balance Fixed)"));
+app.get("/", (req,res)=>res.send("DM-2026 Backend Full OK (v14.0)"));
 app.listen(PORT, "0.0.0.0", () => console.log(`✅ ${VERSION} on port ${PORT}`));
