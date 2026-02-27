@@ -25,7 +25,7 @@ const styleMap = {
   "style_cardboard": "Handmade cardboard craft. The monster must be made of cut-out layered brown corrugated paper. Rough edges, 3D diorama look.",
 
   // ЭТИ УСИЛИВАЕМ (исправляем)
-  "style_pixels": "ULTRA PIXEL ART. Total digital reconstruction. The creature must be built from LARGE SQUARE PIXELS only. No smooth lines, no pencil strokes, no paper. 8-bit game sprite aesthetic.",
+  "style_pixels": "Minecraft blocky aesthetic. 3D Voxel art. The monster must be reconstructed entirely from cubic plastic blocks. NO smooth lines, NO pencil, NO paper background. Sharp edges, vibrant solid colors, 8-bit digital world style. Total transformation into a blocky toy character.",
   
   "style_fairy": "Masterpiece fairytale illustration. High-end Disney 1950s style. Complete repaint of the character using thick gouache and oil paint. Magical lighting, soft textures, no pencil artifacts.",
   
