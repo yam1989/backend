@@ -1,34 +1,39 @@
-// DM-2026 backend — v13.0 (ULTRA WATERCOLOR + WORKING PIXEL)
+// DM-2026 backend — Cloud Run (Node 20 + Express)
+// ✅ ПОЛНАЯ ВЕРСИЯ: ФОТО (10 СТИЛЕЙ) + ВИДЕО (WAN 2.2)
+// ✅ СТИЛИ: АКВАРЕЛЬ (ULTRA), ПИКСЕЛЬ (MINECRAFT), СКАЗКА (DISNEY)
+
 import express from "express";
 import multer from "multer";
 import crypto from "crypto";
 
-const VERSION = "DM-2026 FULL v13.0 (ULTRA WATERCOLOR)";
+const VERSION = "DM-2026 FULL v14.0 (VIDEO + ULTRA PROMPTS)";
 
 const app = express();
 app.disable("x-powered-by");
 const PORT = parseInt(process.env.PORT || "8080", 10);
 
+// Переменные окружения (Replicate)
 const REPLICATE_API_TOKEN = process.env.REPLICATE_API_TOKEN || "";
 const REPLICATE_IMAGE_VERSION = (process.env.REPLICATE_IMAGE_VERSION || "0f1178f5a27e9aa2d2d39c8a43c110f7fa7cbf64062ff04a04cd40899e546065").trim();
 const REPLICATE_VIDEO_VERSION = (process.env.REPLICATE_VIDEO_VERSION || "").trim();
 
+// --- КАРТА СТИЛЕЙ (ПРОМПТЫ) ---
 const styleMap = {
-  // ЭТИ ОСТАВЛЯЕМ (РАБОТАЮТ ХОРОШО)
+  // РАБОТАЮТ ХОРОШО
   "style_3d_magic": "Transform into a premium Pixar-style 3D animation, Disney character aesthetic, volumetric lighting, masterpiece.",
   "style_blocks": "Lego photography style, made of plastic interlocking bricks, toy world, vibrant colors, studio lighting.",
   "style_neon": "Cyberpunk neon glow, futuristic synthwave aesthetic, glowing outlines, high contrast, dark background.",
   "style_comic": "Vintage comic book art, halftone dot patterns, bold black ink outlines, pop art style, vibrant colors.",
   "style_cardboard": "Handmade cardboard craft. The monster must be made of cut-out layered brown corrugated paper. Rough edges, 3D diorama look.",
-  "style_pixels": "Minecraft blocky aesthetic. Total 3D Voxel art reconstruction. The monster MUST be built entirely from CUBIC BLOCKS. NO smooth lines, NO pencil strokes, NO paper. Every detail is a pixel-perfect square block. Vibrant solid colors.",
 
-  // ЭТИ ПОДПРАВИЛИ (УСИЛИЛИ)
+  // УСИЛЕННЫЕ И ИСПРАВЛЕННЫЕ
+  "style_pixels": "Minecraft blocky aesthetic. Total 3D Voxel art reconstruction. The monster MUST be built entirely from CUBIC BLOCKS. NO smooth lines, NO pencil strokes, NO paper. Every detail is a pixel-perfect square block. Vibrant solid colors.",
   "style_anime": "Classic 2D flat cel-shaded anime style. Studio Ghibli aesthetic, bold hand-drawn ink outlines, flat vibrant colors, NO 3D shading, whimsical hand-painted background.",
   "style_fairy": "Golden age of Disney animation (1950s). Hand-painted gouache illustration, magical glow, soft storybook textures, high-end masterpiece. Character must be fully repainted, ignore pencil lines.",
   "style_clay": "Ultra-thick plasticine claymation. Chunky handmade shapes, deep fingerprints, glossy clay reflections, soft volumetric 3D shapes, stop-motion film prop aesthetic.",
-
-  // АКВАРЕЛЬ: МАКСИМАЛЬНЫЙ ПРОРЫВ (Много воды, нет карандаша)
-  "style_watercolor": "A masterpiece of fluid watercolor art. Extreme wet-on-wet technique with heavy paint bleeding and splatters. The creature must be ENTIRELY REPAINTED with vibrant pigments. ABSOLUTELY NO PENCIL LINES, NO SKETCH VISIBLE, NO PAPER TEXTURE. Only soft, artistic watercolor blooms on a clean white background."
+  
+  // ЭКСТРЕМАЛЬНАЯ АКВАРЕЛЬ (БЕЗ КАРАНДАША)
+  "style_watercolor": "Professional abstract fluid watercolor art on CLEAN WHITE paper. EXTREME paint bleeding, heavy water drops, artistic pigment blooms. THE CREATURE MUST BE FULLY REPAINTED. ABSOLUTELY NO PENCIL LINES, NO PEN, NO BLACK OUTLINES. The character is made only of soft colored water stains and wet paint splatters. Masterpiece gallery quality."
 };
 
 function getStyleExtra(styleId) {
@@ -38,7 +43,7 @@ function getStyleExtra(styleId) {
 function buildKontextPrompt(styleId) {
   const base = 
     "Masterpiece art transformation. Convert the child's drawing into a high-end, colorful illustration. " +
-    "STRICT: Keep original composition. Do NOT zoom. " +
+    "STRICT: Keep original composition. Do NOT zoom. Do NOT crop. " +
     "Maintain the shapes but TOTALLY change the texture. Remove all paper artifacts, handwriting, and pencil lines. " +
     "Professional commercial artwork look.";
   return `${base} ${getStyleExtra(styleId)}`.trim();
@@ -57,6 +62,7 @@ function bufferToDataUri(buf, mime) {
   return `data:${mime || "image/png"};base64,${buf.toString("base64")}`;
 }
 
+// --- IMAGE ENDPOINTS ---
 app.post("/magic", upload.single("image"), async (req,res)=>{
   try {
     const file = req.file;
@@ -111,6 +117,7 @@ app.get("/magic/result", async (req,res)=>{
   return res.status(200).send(Buffer.from(await r.arrayBuffer()));
 });
 
+// --- VIDEO ENDPOINTS ---
 app.post("/video/start", upload.single("image"), async (req,res)=>{
   try {
     const file = req.file;
@@ -135,5 +142,5 @@ app.get("/video/status", async (req,res)=>{
   return res.json({ ok:true, status: p.status, outputUrl: p.output });
 });
 
-app.get("/", (req,res)=>res.send("DM-2026 Backend Full OK"));
+app.get("/", (req,res)=>res.send("DM-2026 Backend Full OK (v14.0)"));
 app.listen(PORT, "0.0.0.0", () => console.log(`✅ ${VERSION} on port ${PORT}`));
