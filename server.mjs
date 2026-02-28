@@ -76,62 +76,136 @@ const styleSpecMap = {
 
   style_neon: {
     pos:
-      "Cyberpunk neon glow, futuristic synthwave aesthetic, glowing outlines, high contrast, dark background." +
+      "Cyberpunk neon glow, futuristic synthwave aesthetic, glowing outlines, high contrast, dark background. " +
       "Bright luminous outlines tracing silhouette, holographic glow, subtle glitch energy. High contrast, reflective surface.",
     neg:
       "NO watercolor. NO paper texture. NO pencil lines. NO LEGO. NO cardboard craft. NO halftone comic print. " +
       "NO clay fingerprints. NO voxel Minecraft blocks. NO soft Disney 1950s storybook paint."
   },
 
-style_plush: {
-  pos:
-    "Ultra premium plush toy product photo. " +
-    "Soft fuzzy microfiber fur texture, realistic fibers, cozy fluffy volume. " +
-    "Visible stitched seams, embroidered mouth, small felt tooth detail. " +
-    "Round stuffed-toy proportions, slightly squishy. " +
-    "Warm indoor lighting, soft shadow on fabric surface. " +
-    "Neutral cozy background (brown/tan). " +
-    "High-end toy photography, shallow depth of field. " +
-    "TOTAL REBUILD as a real plush toy. Remove pencil texture completely.",
-  neg:
-    "NO Pixar cinematic render. NO plastic toy surface. NO Roblox avatar. NO LEGO bricks. NO voxel blocks. " +
-    "NO watercolor. NO comic halftone. NO neon glow outlines."
+  style_plush: {
+    pos:
+      "Ultra premium plush toy version of the character. " +
+      "Soft fuzzy microfiber fabric with visible textile fibers. " +
+      "Hand-sewn stitched seams and embroidery details. " +
+      "Stuffed toy proportions with rounded limbs. " +
+      "Embroidered or glossy button eyes. " +
+      "Warm cozy studio lighting. " +
+      "High-end toy product photography look. " +
+      "Completely replace the drawing with soft textile materials.",
+    neg:
+      "NO plastic material. NO hard shiny surface. NO voxel blocks. NO LEGO studs. " +
+      "NO comic ink lines. NO watercolor. NO neon glow. NO flat cel shading."
+  },
 
-},
+  // 👑 УСИЛЕННАЯ PRINCESS (чтобы не была ерундой)
+  style_princess: {
+    pos:
+      "Legendary magical princess transformation. " +
+      "Pastel pink and lavender with warm gold accents. " +
+      "Strong magical glow aura around the character. " +
+      "Glitter sparkles and shimmering stardust particles filling the scene. " +
+      "Soft glowing rim light and dreamy fairytale lighting. " +
+      "Elegant golden crown integrated naturally into the character design. " +
+      "Premium kids fantasy illustration, magical bokeh, clean composition. " +
+      "TOTAL REPAINT FROM SCRATCH. Remove all pencil texture completely.",
+    neg:
+      "NO plain drawing look. NO visible crayon/pencil texture. NO flat shading. " +
+      "NO dark cyberpunk. NO LEGO blocks. NO voxel cubes. NO Minecraft pixels. " +
+      "NO gritty realism. NO comic halftone dots."
+  },
 
-style_princess: {
-  pos:
-    "Legendary magical princess transformation. " +
-    "Soft pastel pink and lavender fur with golden highlights. " +
-    "Glowing magical aura surrounding the character. " +
-    "Sparkling glitter particles floating around. " +
-    "Soft rim light glow. " +
-    "Shimmering fantasy lighting. " +
-    "Elegant golden crown integrated into design. " +
-    "High-end fantasy illustration. " +
-    "TOTAL REPAINT FROM SCRATCH with magical glow effects. " +
-    "Remove all pencil texture.",
-  neg:
-    "NO plain drawing look. NO visible crayon texture. NO flat shading. " +
-    "NO realistic dark lighting. NO LEGO. NO voxel blocks. NO Roblox style."
-},
+  // 🦸 NEW 1 — SUPERHERO
+  style_superhero: {
+    pos:
+      "Ultimate superhero upgrade transformation. " +
+      "Heroic power stance. " +
+      "Flowing cape with dynamic motion. " +
+      "Bright glowing energy aura and lightning sparks. " +
+      "High-contrast dramatic heroic lighting (game splash art). " +
+      "Clean premium character render, powerful silhouette. " +
+      "TOTAL REBUILD FROM SCRATCH into a superhero version. Remove pencil texture completely.",
+    neg:
+      "NO plush fabric. NO jelly candy. NO ice crystal. NO balloon latex. " +
+      "NO LEGO. NO voxel blocks. NO watercolor. NO flat cel shading. NO realistic photo look."
+  },
 
-style_roblox: {
-  pos:
-    "Roblox R15 game avatar style. " +
-    "Simplified blocky limbs with smooth edges. " +
-    "Plastic toy material surface. " +
-    "Minimal shading. Game engine lighting. " +
-    "Clean studio background. " +
-    "Flat but slightly glossy material. " +
-    "Symmetrical avatar proportions. " +
-    "Fully convert into Roblox character model. " +
-    "Remove cinematic lighting and realistic rendering.",
-  neg:
-    "NO voxel cubes. NO pixel textures. NO fur strands. NO watercolor. " +
-    "NO Pixar cinematic light. NO volumetric lighting. NO realistic skin. " +
-    "NO LEGO studs."
- },
+  // 🐉 NEW 2 — DRAGON
+  style_dragon: {
+    pos:
+      "Legendary dragon evolution transformation. " +
+      "Reptile scale armor texture with crisp detail. " +
+      "Small fantasy wings, sharp claws, tiny horns. " +
+      "Glowing ember highlights and subtle smoky particles. " +
+      "Cinematic fantasy lighting with warm fire glow accents. " +
+      "Epic creature design. " +
+      "TOTAL TRANSFORMATION into dragon creature form. Remove pencil texture completely.",
+    neg:
+      "NO fur plush texture. NO plastic toy. NO jelly candy. NO balloon latex. " +
+      "NO LEGO. NO voxel blocks. NO flat cartoon shading. NO comic halftone."
+  },
+
+  // 🍭 NEW 3 — CANDY / JELLY
+  style_candy: {
+    pos:
+      "Candy jelly monster transformation. " +
+      "Highly glossy semi-transparent gelatin body. " +
+      "Bright saturated candy colors. " +
+      "Strong specular highlights and sugar-glaze reflections. " +
+      "Soft internal glow inside the jelly. " +
+      "Ultra smooth rounded shapes, playful candy aesthetic. " +
+      "TOTAL REBUILD as shiny jelly candy creature. Remove pencil texture completely.",
+    neg:
+      "NO fur strands. NO fabric seams. NO matte surfaces. NO ice crystal edges. " +
+      "NO LEGO. NO voxel blocks. NO comic halftone. NO dark gritty lighting."
+  },
+
+  // 🧊 NEW 4 — ICE CRYSTAL
+  style_ice: {
+    pos:
+      "Ice crystal creature transformation. " +
+      "Translucent frozen body with internal refraction. " +
+      "Sharp crystalline edges and frost patterns. " +
+      "Cold blue/cyan rim lighting, icy sparkle glints. " +
+      "Subtle frozen mist particles around character. " +
+      "TOTAL REBUILD into ice crystal monster. Remove pencil texture completely.",
+    neg:
+      "NO warm lighting. NO plush fur. NO balloon latex. NO jelly candy gloss. " +
+      "NO LEGO. NO voxel blocks. NO comic halftone. NO paper texture."
+  },
+
+  // 🎈 NEW 5 — BALLOON TOY
+  style_balloon: {
+    pos:
+      "Inflatable balloon toy transformation. " +
+      "Glossy latex balloon material with strong clear reflections. " +
+      "Over-inflated rounded limbs and belly. " +
+      "Twisted balloon joint details. " +
+      "Bright party colors, playful toy aesthetic. " +
+      "Studio lighting emphasizing shiny latex highlights. " +
+      "TOTAL REBUILD as inflatable balloon character. Remove pencil texture completely.",
+    neg:
+      "NO fur strands. NO fabric seams. NO ice crystal edges. NO jelly candy translucency. " +
+      "NO LEGO. NO voxel blocks. NO watercolor. NO comic halftone."
+  },
+
+  // 🎨 МЯГКАЯ ДЕТСКАЯ МАСЛЯНАЯ ЖИВОПИСЬ
+  style_watercolor: {
+    pos:
+      "Soft children's oil painting on canvas. " +
+      "Thick but gentle impasto brush strokes. " +
+      "Creamy blended oil paint texture. " +
+      "Warm pastel oil palette. " +
+      "Visible canvas fabric texture. " +
+      "Rounded soft edges. " +
+      "Painterly depth with soft light and shadow. " +
+      "Completely repaint from scratch in oil paint. " +
+      "Replace all original lines with expressive brushwork.",
+    neg:
+      "NO watercolor bleeding. NO paper texture. NO pencil lines. " +
+      "NO crisp black outlines. NO vector style. " +
+      "NO LEGO plastic. NO voxel blocks. NO halftone comic dots."
+  },
 
   style_cardboard: {
     pos:
