@@ -1,14 +1,13 @@
-// DM-2026 backend — v33.0 (STABLE HYBRID PRODUCTION)
-// ✅ ИСПРАВЛЕНА ОШИБКА "MISSING ID"
-// ✅ ИСПРАВЛЕН СИНТАКСИС (LN 275)
-// ✅ KLING 1.5 (ТАНЦЫ) + WAN 2.1 (АНИМАЦИЯ)
-// ✅ БЕЗ МАСЛЯНЫХ КРАСОК
+// DM-2026 backend — v34.0 (WAN + KLING 1.5 HYBRID PRODUCTION)
+// ✅ ИСПРАВЛЕНА ОШИБКА "MISSING ID" — ПРЯМАЯ ПЕРЕДАЧА ID ОТ REPLICATE
+// ✅ ВИДЕО: vid_animation (Wan), vid_dance (Kling 1.5)
+// ✅ ФОТО: 16 СТИЛЕЙ (МАСЛЯНЫЕ КРАСКИ УДАЛЕНЫ)
 
 import express from "express";
 import multer from "multer";
 import crypto from "crypto";
 
-const VERSION = "DM-2026 v33.0 (STABLE HYBRID)";
+const VERSION = "DM-2026 v34.0 (HYBRID STABLE)";
 const app = express();
 app.disable("x-powered-by");
 const PORT = parseInt(process.env.PORT || "8080", 10);
@@ -16,17 +15,15 @@ const PORT = parseInt(process.env.PORT || "8080", 10);
 const REPLICATE_API_TOKEN = process.env.REPLICATE_API_TOKEN || "";
 const REPLICATE_IMAGE_VERSION = process.env.REPLICATE_IMAGE_VERSION || "0f1178f5a27e9aa2d2d39c8a43c110f7fa7cbf64062ff04a04cd40899e546065";
 
-// МОДЕЛИ ВИДЕО
+// МОДЕЛИ ВИДЕО (Берем строго из переменных Cloud Run)
 const WAN_MODEL = process.env.WAN_VIDEO_VERSION || "a4ef959146c98679d6c3c54483750058e5ec29b00e3093223126f562e245a190"; 
 const KLING_MODEL = process.env.REPLICATE_VIDEO_VERSION || "69e66597148ef2e28329623e1cf307b22a2754d92e59103c8121f64983050017";
 
-// ПРОМПТЫ ВИДЕО
 const videoStyleMap = {
   "vid_animation": "Cinematic living animation. Subtle breathing, expressive eye blinking. Pixar style, soft lighting.",
   "vid_dance": "High-energy 3D dance animation. The character is performing rhythmic jumping and full-body dancing movements. Dynamic colorful lighting, confetti. Professional 4k motion."
 };
 
-// 16 ФОТО-СТИЛЕЙ
 const styleSpecMap = {
   style_3d_magic: { pos: "Pixar / Disney 3D character. Cinematic lighting.", neg: "flat 2D, watercolor" },
   style_blocks: { pos: "Full LEGO brick reconstruction. Plastic studs.", neg: "fur, paint, pencil" },
@@ -39,7 +36,7 @@ const styleSpecMap = {
   style_princess: { pos: "Princess transformation. Pastel pink, gold.", neg: "cyberpunk, gritty" },
   style_superhero: { pos: "Superhero upgrade. Power stance, cape.", neg: "plush, watercolor" },
   style_dragon: { pos: "Dragon evolution. scale armor, wings, claws.", neg: "fur, LEGO" },
-  style_candy: { pos: "Candy jelly. Glossy gelatin body.", neg: "fur, matte" },
+  style_candy: { pos: "Candy jelly. Glossy semi-transparent gelatin.", neg: "fur, matte" },
   style_ice: { pos: "Ice crystal. Translucent frozen body.", neg: "warm lighting, plush" },
   style_balloon: { pos: "Inflatable balloon. Glossy latex material.", neg: "fur, fabric" },
   style_cardboard: { pos: "Cardboard sculpture. Layered cut-out paper.", neg: "glossy, LEGO" },
@@ -47,16 +44,17 @@ const styleSpecMap = {
 };
 
 const upload = multer({ storage: multer.memoryStorage() });
-const magicJobs = new Map();
+const magicJobs = new Map(); // Оставляем только для кеширования фото
 
 function bufferToDataUri(buf) { return `data:image/png;base64,${buf.toString("base64")}`; }
 
-// --- API ---
+// --- API ЭНДПОИНТЫ ---
 
 app.post("/video/start", upload.single("image"), async (req, res) => {
   try {
     const styleId = (req.body?.styleId || "").toString().trim();
     const isDance = (styleId === "vid_dance");
+    
     const model = isDance ? KLING_MODEL : WAN_MODEL;
     const prompt = `STRICT: Keep exact character. ${videoStyleMap[styleId] || videoStyleMap["vid_animation"]} No morphing.`;
 
@@ -72,17 +70,19 @@ app.post("/video/start", upload.single("image"), async (req, res) => {
     const pred = await r.json();
 
     if (!pred.id) {
-      console.error("Replicate error:", pred);
+      console.error("Replicate failed:", pred);
       return res.status(422).json({ ok: false, error: "Replicate failed to start" });
     }
 
+    // ВАЖНО: Возвращаем ID напрямую от Replicate
     return res.status(200).json({ ok: true, id: pred.id });
   } catch (e) { return res.status(500).json({ ok: false, error: String(e) }); }
 });
 
 app.get("/video/status", async (req, res) => {
   try {
-    const r = await fetch(`https://api.replicate.com/v1/predictions/${req.query.id}`, {
+    const id = req.query.id; 
+    const r = await fetch(`https://api.replicate.com/v1/predictions/${id}`, {
       headers: { Authorization: `Token ${REPLICATE_API_TOKEN}` }
     });
     const p = await r.json();
@@ -107,12 +107,14 @@ app.post("/magic", upload.single("image"), async (req, res) => {
 });
 
 app.get("/magic/status", async (req, res) => {
-  const job = magicJobs.get(req.query.id);
-  const r = await fetch(`https://api.replicate.com/v1/predictions/${job?.predId || req.query.id}`, {
-    headers: { Authorization: `Token ${REPLICATE_API_TOKEN}` }
-  });
-  const p = await r.json();
-  res.json({ ok: true, status: p.status, outputUrl: p.output });
+  try {
+    const job = magicJobs.get(req.query.id);
+    const r = await fetch(`https://api.replicate.com/v1/predictions/${job?.predId || req.query.id}`, {
+      headers: { Authorization: `Token ${REPLICATE_API_TOKEN}` }
+    });
+    const p = await r.json();
+    res.json({ ok: true, status: p.status, outputUrl: p.output });
+  } catch (e) { res.status(500).json({ ok: false }); }
 });
 
 app.get("/", (req, res) => res.send(`DM-2026 Backend OK (${VERSION})`));
