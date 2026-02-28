@@ -130,82 +130,51 @@ const styleSpecMap = {
       "NO LEGO. NO voxel blocks. NO watercolor. NO flat cel shading. NO realistic photo look."
   },
 
-  // 🐉 NEW 2 — DRAGON
-  style_dragon: {
-    pos:
-      "Legendary dragon evolution transformation. " +
-      "Reptile scale armor texture with crisp detail. " +
-      "Small fantasy wings, sharp claws, tiny horns. " +
-      "Glowing ember highlights and subtle smoky particles. " +
-      "Cinematic fantasy lighting with warm fire glow accents. " +
-      "Epic creature design. " +
-      "TOTAL TRANSFORMATION into dragon creature form. Remove pencil texture completely.",
-    neg:
-      "NO fur plush texture. NO plastic toy. NO jelly candy. NO balloon latex. " +
-      "NO LEGO. NO voxel blocks. NO flat cartoon shading. NO comic halftone."
-  },
-
   // 🍭 NEW 3 — CANDY / JELLY
   style_candy: {
-    pos:
-      "Candy jelly monster transformation. " +
-      "Highly glossy semi-transparent gelatin body. " +
-      "Bright saturated candy colors. " +
-      "Strong specular highlights and sugar-glaze reflections. " +
-      "Soft internal glow inside the jelly. " +
-      "Ultra smooth rounded shapes, playful candy aesthetic. " +
-      "TOTAL REBUILD as shiny jelly candy creature. Remove pencil texture completely.",
-    neg:
-      "NO fur strands. NO fabric seams. NO matte surfaces. NO ice crystal edges. " +
-      "NO LEGO. NO voxel blocks. NO comic halftone. NO dark gritty lighting."
-  },
+  pos:
+    "Gummy candy creature transformation (gummy bears / gummy worms aesthetic). " +
+    "Translucent gelatin candy body with soft internal light scattering. " +
+    "Sugary crystal coating on surface (granulated sugar). " +
+    "Sticky glossy highlights, candy-shop product look. " +
+    "Bright candy colors with layered translucency. " +
+    "Smooth rounded gummy shapes, slightly squishy. " +
+    "TOTAL REBUILD as real gummy candy (store-bought gummy texture).",
+  neg:
+    "NO fur strands. NO fabric seams. NO matte surface. NO plastic toy. " +
+    "NO ice crystal edges. NO LEGO. NO voxels. NO comic halftone. " +
+    "NO text, NO letters, NO words, NO typography."
+},
 
   // 🧊 NEW 4 — ICE CRYSTAL
   style_ice: {
-    pos:
-      "Ice crystal creature transformation. " +
-      "Translucent frozen body with internal refraction. " +
-      "Sharp crystalline edges and frost patterns. " +
-      "Cold blue/cyan rim lighting, icy sparkle glints. " +
-      "Subtle frozen mist particles around character. " +
-      "TOTAL REBUILD into ice crystal monster. Remove pencil texture completely.",
-    neg:
-      "NO warm lighting. NO plush fur. NO balloon latex. NO jelly candy gloss. " +
-      "NO LEGO. NO voxel blocks. NO comic halftone. NO paper texture."
-  },
-
+  pos:
+    "Ice crystal creature transformation. " +
+    "Translucent frozen body with internal refraction and caustics. " +
+    "Sharp crystalline edges and frost patterns. " +
+    "Cold blue/cyan rim lighting, icy sparkle glints. " +
+    "Subtle frozen mist particles around character. " +
+    "TOTAL REBUILD into ice crystal monster.",
+  neg:
+    "NO warm lighting. NO plush fur. NO balloon latex. NO gummy candy. " +
+    "NO LEGO. NO voxel blocks. NO comic halftone. NO paper photo. " +
+    "ABSOLUTELY NO TEXT, NO LETTERS, NO WORDS, NO LOREM IPSUM, NO CAPTIONS, NO WATERMARK."
+},
   // 🎈 NEW 5 — BALLOON TOY
   style_balloon: {
-    pos:
-      "Inflatable balloon toy transformation. " +
-      "Glossy latex balloon material with strong clear reflections. " +
-      "Over-inflated rounded limbs and belly. " +
-      "Twisted balloon joint details. " +
-      "Bright party colors, playful toy aesthetic. " +
-      "Studio lighting emphasizing shiny latex highlights. " +
-      "TOTAL REBUILD as inflatable balloon character. Remove pencil texture completely.",
-    neg:
-      "NO fur strands. NO fabric seams. NO ice crystal edges. NO jelly candy translucency. " +
-      "NO LEGO. NO voxel blocks. NO watercolor. NO comic halftone."
-  },
-
-  // 🎨 МЯГКАЯ ДЕТСКАЯ МАСЛЯНАЯ ЖИВОПИСЬ
-  style_watercolor: {
-    pos:
-      "Soft children's oil painting on canvas. " +
-      "Thick but gentle impasto brush strokes. " +
-      "Creamy blended oil paint texture. " +
-      "Warm pastel oil palette. " +
-      "Visible canvas fabric texture. " +
-      "Rounded soft edges. " +
-      "Painterly depth with soft light and shadow. " +
-      "Completely repaint from scratch in oil paint. " +
-      "Replace all original lines with expressive brushwork.",
-    neg:
-      "NO watercolor bleeding. NO paper texture. NO pencil lines. " +
-      "NO crisp black outlines. NO vector style. " +
-      "NO LEGO plastic. NO voxel blocks. NO halftone comic dots."
-  },
+  pos:
+    "Balloon animal / party balloon toy transformation. " +
+    "Twisted long balloon segments, visible knots and pinch points. " +
+    "Inflatable latex balloon material with strong shiny reflections. " +
+    "Over-inflated rounded forms connected by twist joints. " +
+    "Bright party colors, playful balloon sculpture look. " +
+    "Simple clean background, studio flash-like lighting. " +
+    "TOTAL REBUILD as a twisted balloon figure (balloon animal style).",
+  neg:
+    "NO plush fur. NO fabric seams. NO ice crystal. NO jelly candy. " +
+    "NO hard plastic toy. NO Pixar cinematic render. NO LEGO. NO voxels. " +
+    "NO text, NO letters, NO words, NO typography, NO paragraphs."
+},
 
   style_cardboard: {
     pos:
