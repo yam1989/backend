@@ -85,64 +85,53 @@ const styleSpecMap = {
 
 style_plush: {
   pos:
-    "Ultra premium plush toy version of the character. " +
-    "Soft fuzzy microfiber fabric with visible textile fibers. " +
-    "Hand-sewn stitched seams and embroidery details. " +
-    "Stuffed toy proportions with rounded limbs. " +
-    "Embroidered or glossy button eyes. " +
-    "Warm cozy studio lighting. " +
-    "High-end toy product photography look. " +
-    "Completely replace the drawing with soft textile materials.",
+    "Ultra premium plush toy product photo. " +
+    "Soft fuzzy microfiber fur texture, realistic fibers, cozy fluffy volume. " +
+    "Visible stitched seams, embroidered mouth, small felt tooth detail. " +
+    "Round stuffed-toy proportions, slightly squishy. " +
+    "Warm indoor lighting, soft shadow on fabric surface. " +
+    "Neutral cozy background (brown/tan). " +
+    "High-end toy photography, shallow depth of field. " +
+    "TOTAL REBUILD as a real plush toy. Remove pencil texture completely.",
   neg:
-    "NO plastic material. NO hard shiny surface. NO voxel blocks. NO LEGO studs. " +
-    "NO comic ink lines. NO watercolor. NO neon glow. NO flat cel shading."
+    "NO Pixar cinematic render. NO plastic toy surface. NO Roblox avatar. NO LEGO bricks. NO voxel blocks. " +
+    "NO watercolor. NO comic halftone. NO neon glow outlines."
+
 },
 
 style_princess: {
   pos:
-    "Magical princess fantasy transformation. " +
-    "Pastel pink, lavender and warm gold palette. " +
-    "Glitter sparkle aura and shimmering stardust particles. " +
-    "Soft glowing rim light. " +
-    "Dreamy fairytale storybook atmosphere. " +
-    "Elegant luminous highlights and gentle bokeh. " +
-    "Premium kids fantasy illustration. " +
-    "Fully repaint with magical glow effects.",
+    "Legendary magical princess transformation. " +
+    "Soft pastel pink and lavender fur with golden highlights. " +
+    "Glowing magical aura surrounding the character. " +
+    "Sparkling glitter particles floating around. " +
+    "Soft rim light glow. " +
+    "Shimmering fantasy lighting. " +
+    "Elegant golden crown integrated into design. " +
+    "High-end fantasy illustration. " +
+    "TOTAL REPAINT FROM SCRATCH with magical glow effects. " +
+    "Remove all pencil texture.",
   neg:
-    "NO dark cyberpunk. NO LEGO blocks. NO voxel cubes. NO Minecraft pixels. " +
-    "NO plastic toy look. NO comic halftone dots. NO gritty realism."
+    "NO plain drawing look. NO visible crayon texture. NO flat shading. " +
+    "NO realistic dark lighting. NO LEGO. NO voxel blocks. NO Roblox style."
 },
 
 style_roblox: {
   pos:
-    "Roblox style 3D game avatar transformation. " +
-    "Smooth simplified block geometry with rounded edges. " +
-    "Clean plastic material surface. " +
-    "Bright clean studio lighting like a modern mobile game. " +
-    "Simple friendly facial features. " +
-    "Fully convert into a Roblox-style character model.",
+    "Roblox R15 game avatar style. " +
+    "Simplified blocky limbs with smooth edges. " +
+    "Plastic toy material surface. " +
+    "Minimal shading. Game engine lighting. " +
+    "Clean studio background. " +
+    "Flat but slightly glossy material. " +
+    "Symmetrical avatar proportions. " +
+    "Fully convert into Roblox character model. " +
+    "Remove cinematic lighting and realistic rendering.",
   neg:
-    "NO pixel textures. NO Minecraft voxels. NO fur fabric texture. NO watercolor. " +
-    "NO glitter princess sparkles. NO comic halftone. NO neon outline-only render."
-},
-
-  // 🎨 МЯГКАЯ ДЕТСКАЯ МАСЛЯНАЯ ЖИВОПИСЬ
-  style_watercolor: {
-    pos:
-      "Soft children's oil painting on canvas. " +
-      "Thick but gentle impasto brush strokes. " +
-      "Creamy blended oil paint texture. " +
-      "Warm pastel oil palette. " +
-      "Visible canvas fabric texture. " +
-      "Rounded soft edges. " +
-      "Painterly depth with soft light and shadow. " +
-      "Completely repaint from scratch in oil paint. " +
-      "Replace all original lines with expressive brushwork.",
-    neg:
-      "NO watercolor bleeding. NO paper texture. NO pencil lines. " +
-      "NO crisp black outlines. NO vector style. " +
-      "NO LEGO plastic. NO voxel blocks. NO halftone comic dots."
-  },
+    "NO voxel cubes. NO pixel textures. NO fur strands. NO watercolor. " +
+    "NO Pixar cinematic light. NO volumetric lighting. NO realistic skin. " +
+    "NO LEGO studs."
+ },
 
   style_cardboard: {
     pos:
