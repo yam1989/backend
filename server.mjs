@@ -1,14 +1,14 @@
-// DM-2026 backend — v33.1 (STABLE HYBRID PRODUCTION)
-// ✅ ИСПРАВЛЕНА ОШИБКА "MISSING ID"
-// ✅ KLING 1.5 (ТАНЦЫ) + WAN 2.1 (АНИМАЦИЯ)
-// ✅ ВИДЕО ПРОМПТЫ УСИЛЕНЫ: guardrails + no-text + no-new-objects
-// ✅ БЕЗ МАСЛЯНЫХ КРАСОК
+// DM-2026 backend — v33.2 (WAN 2.2 SINGLE MODEL PRODUCTION)
+// ✅ VIDEO: ONE MODEL ONLY (Wan 2.2 i2v A14B via REPLICATE_VIDEO_VERSION)
+// ✅ VIDEO: input schema fixed (image + prompt + num_frames + resolution + fps + steps + shift + go_fast)
+// ✅ VIDEO: strong guardrails + no-text + no-new-objects
+// ✅ IMAGE: /magic unchanged
 
 import express from "express";
 import multer from "multer";
 import crypto from "crypto";
 
-const VERSION = "DM-2026 v33.1 (STABLE HYBRID + VIDEO GUARDRAILS)";
+const VERSION = "DM-2026 v33.2 (WAN 2.2 SINGLE MODEL + VIDEO GUARDRAILS)";
 const app = express();
 app.disable("x-powered-by");
 const PORT = parseInt(process.env.PORT || "8080", 10);
@@ -18,13 +18,9 @@ const REPLICATE_IMAGE_VERSION =
   process.env.REPLICATE_IMAGE_VERSION ||
   "0f1178f5a27e9aa2d2d39c8a43c110f7fa7cbf64062ff04a04cd40899e546065";
 
-// МОДЕЛИ ВИДЕО
-const WAN_MODEL =
-  process.env.WAN_VIDEO_VERSION ||
-  "a4ef959146c98679d6c3c54483750058e5ec29b00e3093223126f562e245a190";
-const KLING_MODEL =
-  process.env.REPLICATE_VIDEO_VERSION ||
-  "69e66597148ef2e28329623e1cf307b22a2754d92e59103c8121f64983050017";
+// ✅ ОДНА ВИДЕО-МОДЕЛЬ: Wan 2.2 i2v A14B (hash version)
+const REPLICATE_VIDEO_VERSION =
+  (process.env.REPLICATE_VIDEO_VERSION || "").toString().trim();
 
 // -------------------- VIDEO PROMPTS --------------------
 
@@ -36,7 +32,7 @@ const videoStyleMap = {
     "joyful dance in place with small rhythmic steps and light body bounce, child-friendly, centered motion, smooth loop"
 };
 
-// Новые action id (если клиент начнёт слать act_* вместо vid_*)
+// Новые action id (если клиент шлёт act_*)
 const videoActionPromptMap = {
   act_happy_dance:
     "small joyful dance in place, playful side-to-side steps, tiny arm motion ONLY if arms already exist, loopable",
@@ -59,20 +55,6 @@ const videoActionPromptMap = {
   act_sparkle_glow:
     "soft premium glow aura gently pulses around the character edges, subtle cinematic shimmer, NO emoji particles, loopable"
 };
-
-// Какие actions считать "танцами/сложными" → Kling
-const KLING_ACTIONS = new Set([
-  "vid_dance",
-  "act_happy_dance",
-  "act_jump_spin",
-  "act_cheer",
-  "act_spin_in_place"
-]);
-
-function pickVideoModel(styleId) {
-  const sid = String(styleId || "").trim();
-  return KLING_ACTIONS.has(sid) ? KLING_MODEL : WAN_MODEL;
-}
 
 function pickVideoBasePrompt(styleId) {
   const sid = String(styleId || "").trim();
@@ -128,6 +110,19 @@ function bufferToDataUri(buf) {
   return `data:image/png;base64,${buf.toString("base64")}`;
 }
 
+// Простые безопасные дефолты под цену/стабильность (Wan 2.2)
+function getVideoDefaults() {
+  // Можно управлять через ENV, но дефолты ок для прод/дешево
+  const resolution = (process.env.VIDEO_RESOLUTION || "480p").toString().trim(); // "480p" | "720p"
+  const num_frames = parseInt(process.env.VIDEO_NUM_FRAMES || "81", 10); // 81..100
+  const frames_per_second = parseInt(process.env.VIDEO_FPS || "16", 10); // 5..24
+  const sample_steps = parseInt(process.env.VIDEO_SAMPLE_STEPS || "30", 10); // 1..50 (30 хорошо)
+  const sample_shift = Number(process.env.VIDEO_SAMPLE_SHIFT || "5"); // 1..20 (5 дефолт)
+  const go_fast = String(process.env.VIDEO_GO_FAST || "false").toLowerCase() === "true";
+
+  return { resolution, num_frames, frames_per_second, sample_steps, sample_shift, go_fast };
+}
+
 // --- API ---
 
 app.post("/video/start", upload.single("image"), async (req, res) => {
@@ -135,26 +130,38 @@ app.post("/video/start", upload.single("image"), async (req, res) => {
     const file = req.file;
     if (!file?.buffer) return res.status(400).json({ ok: false, error: "Missing image" });
 
+    if (!REPLICATE_VIDEO_VERSION) {
+      return res.status(500).json({
+        ok: false,
+        error: "Missing REPLICATE_VIDEO_VERSION env (Wan 2.2 version hash)"
+      });
+    }
+
+    // Клиент шлёт styleId (vid_* или act_*)
     const styleId = (req.body?.styleId || "").toString().trim();
 
-    const model = pickVideoModel(styleId);
     const prompt = buildVideoPrompt(styleId);
 
-    // Kling обычно лучше слушает prompt при нормальном cfg.
-    // Wan оставляем без лишних параметров (дешевле/стабильнее).
-    const isKling = model === KLING_MODEL;
+    const { resolution, num_frames, frames_per_second, sample_steps, sample_shift, go_fast } =
+      getVideoDefaults();
 
-    const input = isKling
-      ? {
-          image: bufferToDataUri(file.buffer),
-          prompt,
-          duration: 5,
-          cfg_scale: 6
-        }
-      : {
-          image: bufferToDataUri(file.buffer),
-          prompt
-        };
+    // ✅ Wan 2.2 schema:
+    // input: { image, prompt, num_frames, resolution, frames_per_second, sample_steps, sample_shift, go_fast, seed? }
+    const input = {
+      image: bufferToDataUri(file.buffer),
+      prompt,
+      num_frames,
+      resolution,
+      frames_per_second,
+      sample_steps,
+      sample_shift,
+      go_fast
+    };
+
+    // optional seed override from client
+    const seedRaw = req.body?.seed;
+    const seed = seedRaw === undefined || seedRaw === null || seedRaw === "" ? null : parseInt(seedRaw, 10);
+    if (Number.isFinite(seed)) input.seed = seed;
 
     const r = await fetch("https://api.replicate.com/v1/predictions", {
       method: "POST",
@@ -162,17 +169,22 @@ app.post("/video/start", upload.single("image"), async (req, res) => {
         Authorization: `Token ${REPLICATE_API_TOKEN}`,
         "Content-Type": "application/json"
       },
-      body: JSON.stringify({ version: model, input })
+      body: JSON.stringify({ version: REPLICATE_VIDEO_VERSION, input })
     });
 
     const pred = await r.json();
 
     if (!pred?.id) {
       console.error("Replicate error:", pred);
-      return res.status(422).json({ ok: false, error: "Replicate failed to start" });
+      return res.status(422).json({ ok: false, error: "Replicate failed to start", details: pred });
     }
 
-    return res.status(200).json({ ok: true, id: pred.id, model });
+    return res.status(200).json({
+      ok: true,
+      id: pred.id,
+      model: "wan-video/wan-2.2-i2v-a14b",
+      used: { styleId, resolution, num_frames, frames_per_second, sample_steps, sample_shift, go_fast }
+    });
   } catch (e) {
     return res.status(500).json({ ok: false, error: String(e) });
   }
