@@ -83,7 +83,50 @@ const styleSpecMap = {
       "NO clay fingerprints. NO voxel Minecraft blocks. NO soft Disney 1950s storybook paint."
   },
 
-    // 🎨 МЯГКАЯ ДЕТСКАЯ МАСЛЯНАЯ ЖИВОПИСЬ
+style_plush: {
+  pos:
+    "Ultra premium plush toy version of the character. " +
+    "Soft fuzzy microfiber fabric with visible textile fibers. " +
+    "Hand-sewn stitched seams and embroidery details. " +
+    "Stuffed toy proportions with rounded limbs. " +
+    "Embroidered or glossy button eyes. " +
+    "Warm cozy studio lighting. " +
+    "High-end toy product photography look. " +
+    "Completely replace the drawing with soft textile materials.",
+  neg:
+    "NO plastic material. NO hard shiny surface. NO voxel blocks. NO LEGO studs. " +
+    "NO comic ink lines. NO watercolor. NO neon glow. NO flat cel shading."
+},
+
+style_princess: {
+  pos:
+    "Magical princess fantasy transformation. " +
+    "Pastel pink, lavender and warm gold palette. " +
+    "Glitter sparkle aura and shimmering stardust particles. " +
+    "Soft glowing rim light. " +
+    "Dreamy fairytale storybook atmosphere. " +
+    "Elegant luminous highlights and gentle bokeh. " +
+    "Premium kids fantasy illustration. " +
+    "Fully repaint with magical glow effects.",
+  neg:
+    "NO dark cyberpunk. NO LEGO blocks. NO voxel cubes. NO Minecraft pixels. " +
+    "NO plastic toy look. NO comic halftone dots. NO gritty realism."
+},
+
+style_roblox: {
+  pos:
+    "Roblox style 3D game avatar transformation. " +
+    "Smooth simplified block geometry with rounded edges. " +
+    "Clean plastic material surface. " +
+    "Bright clean studio lighting like a modern mobile game. " +
+    "Simple friendly facial features. " +
+    "Fully convert into a Roblox-style character model.",
+  neg:
+    "NO pixel textures. NO Minecraft voxels. NO fur fabric texture. NO watercolor. " +
+    "NO glitter princess sparkles. NO comic halftone. NO neon outline-only render."
+},
+
+  // 🎨 МЯГКАЯ ДЕТСКАЯ МАСЛЯНАЯ ЖИВОПИСЬ
   style_watercolor: {
     pos:
       "Soft children's oil painting on canvas. " +
