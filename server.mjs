@@ -6,7 +6,7 @@ import express from "express";
 import multer from "multer";
 import crypto from "crypto";
 
-const VERSION = "DM-2026 FULL v13.0 (STYLE ENFORCEMENT + NEGATIVE CONSTRAINTS)";
+const VERSION = "DM-2026 FULL v13.1 (VIDEO ACTION MAP + STRONG VIDEO GUARDRAILS)";
 
 const app = express();
 app.disable("x-powered-by");
@@ -147,34 +147,66 @@ const styleSpecMap = {
 
   // 🍭 NEW 3 — CANDY / JELLY
   style_candy: {
-  pos:
-    "Gummy candy creature transformation (gummy bears / gummy worms aesthetic). " +
-    "Translucent gelatin candy body with soft internal light scattering. " +
-    "Sugary crystal coating on surface (granulated sugar). " +
-    "Sticky glossy highlights, candy-shop product look. " +
-    "Bright candy colors with layered translucency. " +
-    "Smooth rounded gummy shapes, slightly squishy. " +
-    "TOTAL REBUILD as real gummy candy (store-bought gummy texture).",
-  neg:
-    "NO fur strands. NO fabric seams. NO matte surface. NO plastic toy. " +
-    "NO ice crystal edges. NO LEGO. NO voxels. NO comic halftone. " +
-    "NO text, NO letters, NO words, NO typography."
-},
+    pos:
+      "Candy jelly monster transformation. " +
+      "Highly glossy semi-transparent gelatin body. " +
+      "Bright saturated candy colors. " +
+      "Strong specular highlights and sugar-glaze reflections. " +
+      "Soft internal glow inside the jelly. " +
+      "Ultra smooth rounded shapes, playful candy aesthetic. " +
+      "TOTAL REBUILD as shiny jelly candy creature. Remove pencil texture completely.",
+    neg:
+      "NO fur strands. NO fabric seams. NO matte surfaces. NO ice crystal edges. " +
+      "NO LEGO. NO voxel blocks. NO comic halftone. NO dark gritty lighting."
+  },
 
   // 🧊 NEW 4 — ICE CRYSTAL
   style_ice: {
-  pos:
-    "Ice crystal creature transformation. " +
-    "Translucent frozen body with internal refraction and caustics. " +
-    "Sharp crystalline edges and frost patterns. " +
-    "Cold blue/cyan rim lighting, icy sparkle glints. " +
-    "Subtle frozen mist particles around character. " +
-    "TOTAL REBUILD into ice crystal monster.",
-  neg:
-    "NO warm lighting. NO plush fur. NO balloon latex. NO gummy candy. " +
-    "NO LEGO. NO voxel blocks. NO comic halftone. NO paper photo. " +
-    "ABSOLUTELY NO TEXT, NO LETTERS, NO WORDS, NO LOREM IPSUM, NO CAPTIONS, NO WATERMARK."
-},
+    pos:
+      "Ice crystal creature transformation. " +
+      "Translucent frozen body with internal refraction. " +
+      "Sharp crystalline edges and frost patterns. " +
+      "Cold blue/cyan rim lighting, icy sparkle glints. " +
+      "Subtle frozen mist particles around character. " +
+      "TOTAL REBUILD into ice crystal monster. Remove pencil texture completely.",
+    neg:
+      "NO warm lighting. NO plush fur. NO balloon latex. NO jelly candy gloss. " +
+      "NO LEGO. NO voxel blocks. NO comic halftone. NO paper texture."
+  },
+
+  // 🎈 NEW 5 — BALLOON TOY
+  style_balloon: {
+    pos:
+      "Inflatable balloon toy transformation. " +
+      "Glossy latex balloon material with strong clear reflections. " +
+      "Over-inflated rounded limbs and belly. " +
+      "Twisted balloon joint details. " +
+      "Bright party colors, playful toy aesthetic. " +
+      "Studio lighting emphasizing shiny latex highlights. " +
+      "TOTAL REBUILD as inflatable balloon character. Remove pencil texture completely.",
+    neg:
+      "NO fur strands. NO fabric seams. NO ice crystal edges. NO jelly candy translucency. " +
+      "NO LEGO. NO voxel blocks. NO watercolor. NO comic halftone."
+  },
+
+  // 🎨 МЯГКАЯ ДЕТСКАЯ МАСЛЯНАЯ ЖИВОПИСЬ
+  style_watercolor: {
+    pos:
+      "Soft children's oil painting on canvas. " +
+      "Thick but gentle impasto brush strokes. " +
+      "Creamy blended oil paint texture. " +
+      "Warm pastel oil palette. " +
+      "Visible canvas fabric texture. " +
+      "Rounded soft edges. " +
+      "Painterly depth with soft light and shadow. " +
+      "Completely repaint from scratch in oil paint. " +
+      "Replace all original lines with expressive brushwork.",
+    neg:
+      "NO watercolor bleeding. NO paper texture. NO pencil lines. " +
+      "NO crisp black outlines. NO vector style. " +
+      "NO LEGO plastic. NO voxel blocks. NO halftone comic dots."
+  },
+
   style_cardboard: {
     pos:
       "Handcrafted corrugated cardboard sculpture. Layered cut-out brown paper sheets. Visible fluted inner texture. " +
@@ -250,11 +282,69 @@ function buildKontextPrompt(styleId) {
   return `${base} ${styleEnforcement} ${stylePos} ${globalNegative} ${negBlock}`.trim();
 }
 
+// -------------------- VIDEO: ACTION MAP + GUARDRAILS --------------------
+
+// Premium universal action prompts (NO new objects, NO text, preserve composition).
+const videoActionPromptMap = {
+  act_happy_dance:
+    "small joyful dance in place, playful side-to-side steps, tiny arm motion ONLY if arms already exist, " +
+    "natural body bounce, cute and premium, loopable",
+  act_big_laugh:
+    "big cheerful laugh expression, shoulders bounce slightly, eyes squint naturally, " +
+    "subtle body motion only, loopable",
+  act_jump_spin:
+    "small vertical jump followed by gentle 360 spin in place, lands softly, " +
+    "motion stays centered, loopable",
+  act_cheer:
+    "excited celebration pose, happy bounce upward, raise arms ONLY if arms already exist, " +
+    "joyful expression, loopable",
+  act_shy_wave:
+    "small shy wave with slight head tilt, gentle body sway, soft friendly emotion, " +
+    "use ONLY existing limbs, loopable",
+  act_power_pose:
+    "confident power pose, slight chest lift and subtle energy bounce, heroic but child-friendly, " +
+    "no added elements, loopable",
+  act_float_bounce:
+    "gentle floating upward and soft bounce down, subtle squash-and-stretch within original silhouette, " +
+    "background stays still, loopable",
+  act_peek_hide:
+    "leans slightly to one side as if peeking, then returns to center playfully, " +
+    "minimal body movement, loopable",
+  act_spin_in_place:
+    "slow smooth spin in place, centered rotation, natural balance, no distortion, loopable",
+  act_sparkle_glow:
+    "soft premium glow aura gently pulses around the character edges, subtle cinematic shimmer, " +
+    "NO emoji particles, loopable"
+};
+
 function buildVideoPrompt(userPrompt) {
-  const p = String(userPrompt || "").trim();
-  if (p) return p;
-  return `Animate ALL existing objects in the drawing. Smooth, premium Pixar-style animation. Soft dimensional lighting. No new objects.`;
+  const raw = String(userPrompt || "").trim();
+
+  // If client passes an action id, map it to a strong prompt.
+  const mapped = videoActionPromptMap[raw] || "";
+
+  // Allow custom prompt text, but always enforce strict guardrails.
+  const actionText = mapped || raw;
+
+  // If still empty, default to a safe, universal motion.
+  const fallback =
+    "gentle alive motion only: subtle breathing and tiny friendly micro-movements, loopable";
+
+  const chosen = actionText || fallback;
+
+  // Strong universal constraints for video (prevents text + new objects + camera moves).
+  const guardrails =
+    "VIDEO ANIMATION TASK: animate ONLY the existing subject in the provided drawing. " +
+    "STRICT: preserve original composition and framing. Do NOT zoom, crop, rotate, or change camera. " +
+    "Keep background static. Do NOT add any new objects, props, particles, stickers, logos, or UI. " +
+    "Do NOT invent new limbs/faces/characters. Do NOT change the character identity. " +
+    "ABSOLUTELY NO TEXT, NO LETTERS, NO WORDS, NO TYPOGRAPHY, NO LOREM IPSUM. " +
+    "Motion must be smooth, premium, child-friendly, subtle, and loopable. ";
+
+  return `${guardrails}${chosen}`.trim();
 }
+
+// ----------------------------------------------------------------------
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
 const magicJobs = new Map();
@@ -329,12 +419,18 @@ app.post("/video/start", upload.single("image"), async (req, res) => {
   try {
     const file = req.file;
     if (!file?.buffer) return res.status(400).json({ ok: false, error: "Missing image" });
+
     const prompt = buildVideoPrompt(req.body?.prompt);
+
     const r = await fetch("https://api.replicate.com/v1/predictions", {
       method: "POST",
       headers: { Authorization: `Token ${REPLICATE_API_TOKEN}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ version: REPLICATE_VIDEO_VERSION, input: { image: bufferToDataUri(file.buffer, file.mimetype), prompt } })
+      body: JSON.stringify({
+        version: REPLICATE_VIDEO_VERSION,
+        input: { image: bufferToDataUri(file.buffer, file.mimetype), prompt }
+      })
     });
+
     const pred = await r.json();
     return res.status(200).json({ ok: true, id: pred.id });
   } catch (e) {
