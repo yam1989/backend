@@ -2,12 +2,13 @@
 // ✅ PHOTO + VIDEO endpoints preserved
 // ✅ STYLE ENFORCEMENT + NEGATIVE CONSTRAINTS
 // ✅ VIDEO ACTION MAP + STRONG VIDEO GUARDRAILS
+// ✅ SAFE IMAGE PROMPT UPGRADE (STRUCTURE LOCK, VIDEO UNCHANGED)
 
 import express from "express";
 import multer from "multer";
 import crypto from "crypto";
 
-const VERSION = "DM-2026 FULL v13.1 (VIDEO ACTION MAP + STRONG VIDEO GUARDRAILS)";
+const VERSION = "DM-2026 FULL v13.2 (SAFE IMAGE PROMPTS + VIDEO ACTION MAP + STRONG VIDEO GUARDRAILS)";
 
 const app = express();
 app.disable("x-powered-by");
@@ -24,199 +25,203 @@ const REPLICATE_VIDEO_VERSION = (process.env.REPLICATE_VIDEO_VERSION || "").trim
 const styleSpecMap = {
   style_3d_magic: {
     pos:
-      "Ultra high-end Pixar / Disney 3D character redesign. Cinematic global illumination, volumetric light rays, subsurface scattering. " +
-      "Premium animated movie rendering. Real depth in fur and materials, physically based rendering. " +
-      "Glossy expressive eyes with detailed reflections. Clean studio background, masterpiece animation frame.",
+      "Premium soft Pixar / Disney inspired 3D cartoon restyle. " +
+      "Preserve the exact original child drawing proportions, pose, silhouette, and simple anatomy. " +
+      "Use rounded soft forms, gentle global illumination, clean soft materials, subtle expressive eyes, and polished family-animation rendering. " +
+      "Keep the character simple, childlike, and clearly recognizable as the same drawing. " +
+      "Only change rendering, material, and lighting style.",
     neg:
-      "NO flat 2D. NO anime lines. NO halftone. NO comic dots. NO cardboard craft. NO LEGO studs. NO voxel blocks. " +
-      "NO watercolor bleeding. NO paper texture. NO text."
+      "NO character redesign. NO anatomy improvement. NO realistic human proportions. NO extra limbs. NO extra fingers. " +
+      "NO pose change. NO new character details that alter structure. NO flat 2D anime lines. NO halftone. NO comic dots. " +
+      "NO cardboard craft. NO LEGO studs. NO voxel blocks. NO watercolor bleeding. NO paper texture. NO text."
   },
 
   style_blocks: {
     pos:
-      "Full LEGO brick reconstruction. Character MUST be entirely built from glossy interlocking plastic bricks with visible studs. " +
-      "Injection-molded toy plastic material, vibrant primary colors, clean modular geometry. Studio toy photography lighting.",
+      "LEGO brick toy restyle. " +
+      "Preserve the exact original child drawing proportions, pose, silhouette, and overall shape. " +
+      "Rebuild the SAME character using simple glossy interlocking toy bricks with visible studs, vibrant toy colors, and clean studio toy lighting. " +
+      "Keep the result minimal, readable, child-friendly, and clearly based on the original drawing rather than a new toy character.",
     neg:
-      "NO fur. NO paint strokes. NO watercolor. NO paper texture. NO pencil lines. NO organic skin. " +
-      "NO neon glow outlines. NO halftone comic print. NO clay fingerprints. NO voxels without studs. NO text."
+      "NO shape redesign. NO anatomy changes. NO new character identity. NO realistic skin. NO fur. NO paint strokes. " +
+      "NO watercolor. NO paper texture. NO pencil lines. NO organic skin. NO neon glow outlines. NO halftone comic print. " +
+      "NO clay fingerprints. NO voxels without studs. NO text."
   },
 
   style_pixels: {
     pos:
-      "TRUE 3D voxel Minecraft reconstruction. The monster MUST be rebuilt entirely from cubic voxel blocks. " +
-      "All forms are square. Pixel-perfect block detail. Sandbox game aesthetic, simple game lighting, crisp edges.",
+      "True voxel pixel-block restyle. " +
+      "Preserve the exact original child drawing proportions, pose, silhouette, and body layout. " +
+      "Recreate the SAME character using simple cubic voxel blocks, crisp square forms, pixel-block surface breakup, and clean game-style lighting. " +
+      "Keep it child-friendly, simple, and recognizable as the original drawing translated into voxel form, not a different monster or game mob.",
     neg:
-      "NO curves. NO smooth surfaces. NO fur strands. NO pencil strokes. NO paper. NO watercolor. " +
+      "NO redesign into a Minecraft mob. NO new creature anatomy. NO monster reinterpretation. NO pose change. NO extra body parts. " +
+      "NO curves beyond the original intent. NO smooth realistic surfaces. NO fur strands. NO pencil strokes. NO paper. NO watercolor. " +
       "NO LEGO studs. NO cardboard fibers. NO halftone comic dots. NO neon glowing outlines. NO text."
   },
 
   style_fairy: {
     pos:
-      "Golden age Disney 1950s fairytale illustration. Fully hand-painted gouache artwork. Soft romantic pastel palette. " +
-      "Magical glow aura, storybook lighting, warm rim light, rich painted textures. Character completely repainted.",
+      "Golden-age fairytale illustration restyle. " +
+      "Preserve the exact original child drawing proportions, pose, silhouette, and simple anatomy. " +
+      "Use soft storybook painting, romantic pastel palette, magical glow aura, warm fairytale lighting, and rich painted texture. " +
+      "Keep the character naive, gentle, childlike, and clearly the same original drawing, only transformed in material and paint style.",
     neg:
-      "NO 3D render look. NO plastic shine. NO LEGO. NO voxels. NO comic halftone. NO cyber neon. " +
-      "NO modern anime cel shading. NO visible pencil lines or paper photo artifacts. NO text."
+      "NO character redesign. NO anatomy improvements. NO realistic proportions. NO 3D render look. NO plastic shine. NO LEGO. NO voxels. " +
+      "NO comic halftone. NO cyber neon. NO modern anime cel shading. NO visible pencil lines or paper photo artifacts. NO text."
   },
 
   style_anime: {
     pos:
-      "Authentic 2D cel-shaded Japanese anime style. Clean hand-drawn ink outlines, flat vibrant color fills, " +
-      "minimal cel shading. Whimsical painted background. Studio Ghibli inspired cinematic frame.",
+      "Authentic soft 2D anime restyle. " +
+      "Preserve the exact original child drawing proportions, pose, silhouette, and simple anatomy. " +
+      "Use clean hand-drawn outlines, flat vibrant fills, minimal cel shading, and a whimsical painted atmosphere. " +
+      "Keep the character simple, childlike, and recognizably the same drawing rather than redesigning it into a new anime character.",
     neg:
-      "NO 3D shading. NO PBR realism. NO plastic toy look. NO LEGO. NO voxels. NO comic halftone dots. " +
-      "NO watercolor bleed-heavy diffusion. NO neon cyber outlines. NO text."
+      "NO redesign. NO anatomy enhancement. NO realistic face proportions. NO 3D shading. NO PBR realism. NO plastic toy look. " +
+      "NO LEGO. NO voxels. NO comic halftone dots. NO watercolor bleed-heavy diffusion. NO neon cyber outlines. NO text."
   },
 
   style_clay: {
     pos:
-      "Ultra-thick stop-motion plasticine claymation. Chunky handmade sculpted shapes. Deep visible fingerprints and tool marks. " +
-      "Soft volumetric 3D lighting. Glossy oily clay reflections. Real film prop aesthetic.",
+      "Stop-motion plasticine claymation restyle. " +
+      "Preserve the exact original child drawing proportions, pose, silhouette, and simple anatomy. " +
+      "Use chunky handmade clay forms, visible soft fingerprints, tool marks, gentle volumetric lighting, and glossy clay reflections. " +
+      "Keep the result simple, cute, and clearly the same original child drawing translated into clay.",
     neg:
-      "NO smooth digital 3D render. NO anime lines. NO watercolor paint. NO paper texture. NO LEGO studs. " +
-      "NO voxel blocks. NO halftone comic dots. NO neon outline-only rendering. NO text."
+      "NO redesign. NO anatomy changes. NO realistic sculpting. NO smooth digital 3D render. NO anime lines. NO watercolor paint. " +
+      "NO paper texture. NO LEGO studs. NO voxel blocks. NO halftone comic dots. NO neon outline-only rendering. NO text."
   },
 
   style_neon: {
     pos:
-      "Cyberpunk neon glow, futuristic synthwave aesthetic, glowing outlines, high contrast, dark background. " +
-      "Bright luminous outlines tracing silhouette, holographic glow, subtle glitch energy. High contrast, reflective surface.",
+      "Cyber neon glow restyle. " +
+      "Preserve the exact original child drawing proportions, pose, silhouette, and simple anatomy. " +
+      "Apply glowing outlines, futuristic synthwave atmosphere, high-contrast lighting, holographic glow accents, and reflective neon mood. " +
+      "Keep the character itself simple and unchanged in structure, only restyled with luminous materials and light.",
     neg:
-      "NO watercolor. NO paper texture. NO pencil lines. NO LEGO. NO cardboard craft. NO halftone comic print. " +
-      "NO clay fingerprints. NO voxel Minecraft blocks. NO soft Disney 1950s storybook paint. NO text."
+      "NO redesign. NO anatomy changes. NO new accessories that alter shape. NO watercolor. NO paper texture. NO pencil lines. " +
+      "NO LEGO. NO cardboard craft. NO halftone comic print. NO clay fingerprints. NO voxel Minecraft blocks. " +
+      "NO soft Disney 1950s storybook paint. NO text."
   },
 
   style_plush: {
     pos:
-      "Ultra premium plush toy product photo. " +
-      "Soft fuzzy microfiber fur texture with visible fibers. " +
-      "Hand-sewn stitched seams and embroidery details. " +
-      "Stuffed toy proportions with rounded limbs, slightly squishy. " +
-      "Warm cozy indoor studio lighting, soft shadow on fabric surface. " +
-      "High-end toy photography look, shallow depth of field. " +
-      "TOTAL REBUILD as a real plush toy. Remove pencil texture completely.",
+      "Ultra premium plush toy restyle. " +
+      "Preserve the exact original child drawing proportions, pose, silhouette, and simple anatomy. " +
+      "Use soft fuzzy microfiber fur texture, stitched seams, embroidered features, stuffed toy softness, cozy warm lighting, and a high-end toy photo feel. " +
+      "Keep the character rounded, simple, childlike, and clearly the same drawing translated into plush material. " +
+      "Remove pencil texture and paper artifacts without changing structure.",
     neg:
-      "NO plastic material. NO hard shiny surface. NO voxel blocks. NO LEGO studs. " +
+      "NO character redesign. NO anatomy changes. NO hard shiny plastic look. NO voxel blocks. NO LEGO studs. " +
       "NO comic ink lines. NO watercolor. NO neon glow. NO flat cel shading. NO text."
   },
 
   style_princess: {
     pos:
-      "Legendary magical princess transformation. " +
-      "Pastel pink and lavender with warm gold accents. " +
-      "Strong magical glow aura around the character. " +
-      "Glitter sparkles and shimmering stardust particles filling the scene. " +
-      "Soft glowing rim light and dreamy fairytale lighting. " +
-      "Elegant golden crown integrated naturally into the character design. " +
-      "Premium kids fantasy illustration, magical bokeh, clean composition. " +
-      "TOTAL REPAINT FROM SCRATCH. Remove all pencil texture completely.",
+      "Legendary magical princess restyle. " +
+      "Preserve the exact original child drawing proportions, pose, silhouette, and simple anatomy. " +
+      "Use pastel pink and lavender, warm gold accents, magical glow aura, glitter sparkles, dreamy fairytale lighting, and an elegant crown integrated gently without changing character structure. " +
+      "Keep the drawing naive, childlike, and recognizable as the same original figure, only restyled into a princess fantasy mood. " +
+      "Remove paper and pencil artifacts without redesigning the character.",
     neg:
-      "NO plain drawing look. NO visible crayon/pencil texture. NO flat shading. " +
-      "NO dark cyberpunk. NO LEGO blocks. NO voxel cubes. NO Minecraft pixels. " +
-      "NO gritty realism. NO comic halftone dots. NO text."
+      "NO redesign. NO anatomy changes. NO realistic face. NO mature proportions. NO plain rough drawing artifacts. " +
+      "NO visible crayon or pencil texture. NO flat boring shading. NO dark cyberpunk. NO LEGO blocks. NO voxel cubes. " +
+      "NO Minecraft pixels. NO gritty realism. NO comic halftone dots. NO text."
   },
 
   style_superhero: {
     pos:
-      "Ultimate superhero upgrade transformation. " +
-      "Heroic power stance. " +
-      "Flowing cape with dynamic motion. " +
-      "Bright glowing energy aura and lightning sparks. " +
-      "High-contrast dramatic heroic lighting (game splash art). " +
-      "Clean premium character render, powerful silhouette. " +
-      "TOTAL REBUILD FROM SCRATCH into a superhero version. Remove pencil texture completely.",
+      "Ultimate superhero restyle. " +
+      "Preserve the exact original child drawing proportions, pose, silhouette, and simple anatomy. " +
+      "Add heroic costume styling, a cape if compatible with the original shape, bright energy aura, lightning accents, and dramatic kid-friendly heroic lighting. " +
+      "Keep the character clearly the same original drawing and do not redesign body structure, muscles, or proportions. " +
+      "Remove paper and pencil artifacts while preserving simplicity.",
     neg:
-      "NO plush fabric. NO gummy candy. NO ice crystal. NO balloon latex. " +
-      "NO LEGO. NO voxel blocks. NO watercolor. NO flat cel shading. NO realistic photo look. NO text."
+      "NO muscular redesign. NO anatomy changes. NO realistic hero body. NO new body structure. NO plush fabric. NO gummy candy. " +
+      "NO ice crystal. NO balloon latex. NO LEGO. NO voxel blocks. NO watercolor. NO flat cel shading. " +
+      "NO realistic photo look. NO text."
   },
 
   // 🍬 GUMMY CANDY (marmalade bears / worms)
   style_candy: {
     pos:
-      "Gummy candy creature transformation (gummy bears / gummy worms aesthetic). " +
-      "Translucent gelatin candy body with soft internal light scattering. " +
-      "Sugary crystal coating on surface (granulated sugar). " +
-      "Sticky glossy highlights, candy-shop product look. " +
-      "Bright candy colors with layered translucency. " +
-      "Smooth rounded gummy shapes, slightly squishy. " +
-      "TOTAL REBUILD as real store-bought gummy candy texture. Remove pencil texture completely.",
+      "Gummy candy creature restyle. " +
+      "Preserve the exact original child drawing proportions, pose, silhouette, and simple anatomy. " +
+      "Use translucent gelatin candy material, soft internal light scattering, sugary crystal coating, sticky glossy highlights, bright candy colors, and rounded squishy forms. " +
+      "Keep the result simple, playful, and clearly the same original drawing translated into gummy candy material. " +
+      "Remove paper and pencil artifacts without changing structure.",
     neg:
-      "NO fur strands. NO fabric seams. NO matte surface. NO plastic toy. " +
-      "NO ice crystal edges. NO LEGO. NO voxels. NO comic halftone. " +
-      "NO text, NO letters, NO words, NO typography."
+      "NO redesign. NO anatomy changes. NO realistic creature body. NO fur strands. NO fabric seams. NO matte surface. NO plastic toy. " +
+      "NO ice crystal edges. NO LEGO. NO voxels. NO comic halftone. NO text. NO letters. NO words. NO typography."
   },
 
   // 🧊 ICE (hard NO TEXT)
   style_ice: {
     pos:
-      "Ice crystal creature transformation. " +
-      "Translucent frozen body with internal refraction and caustics. " +
-      "Sharp crystalline edges and frost patterns. " +
-      "Cold blue/cyan rim lighting, icy sparkle glints. " +
-      "Subtle frozen mist particles around character. " +
-      "TOTAL REBUILD into ice crystal monster. Remove pencil texture completely.",
+      "Ice crystal restyle. " +
+      "Preserve the exact original child drawing proportions, pose, silhouette, and simple anatomy. " +
+      "Use translucent frozen material, internal refraction, soft caustic glow, gentle crystalline surfaces, frost patterns, cold blue rim light, and subtle icy sparkle. " +
+      "Keep the character child-friendly, simple, and clearly the same original drawing, not a new monster. " +
+      "Remove paper and pencil artifacts without changing structure.",
     neg:
-      "NO warm lighting. NO plush fur. NO balloon latex. NO gummy candy. " +
-      "NO LEGO. NO voxel blocks. NO comic halftone. NO paper photo. " +
-      "ABSOLUTELY NO TEXT, NO LETTERS, NO WORDS, NO TYPOGRAPHY, NO LOREM IPSUM, NO CAPTIONS, NO WATERMARK."
+      "NO monster redesign. NO aggressive creature reinterpretation. NO major sharp armor-like geometry that changes the shape. " +
+      "NO anatomy changes. NO extra claws. NO extra teeth. NO warm lighting. NO plush fur. NO balloon latex. NO gummy candy. " +
+      "NO LEGO. NO voxel blocks. NO comic halftone. NO paper photo. ABSOLUTELY NO TEXT, NO LETTERS, NO WORDS, " +
+      "NO TYPOGRAPHY, NO LOREM IPSUM, NO CAPTIONS, NO WATERMARK."
   },
 
   // 🎈 BALLOON ANIMAL (twisted)
   style_balloon: {
     pos:
-      "Balloon animal / party balloon toy transformation. " +
-      "Twisted long balloon segments, visible knots and pinch points. " +
-      "Inflatable latex balloon material with strong shiny reflections. " +
-      "Over-inflated rounded forms connected by twist joints. " +
-      "Bright party colors, playful balloon sculpture look. " +
-      "Simple clean background, studio flash-like lighting. " +
-      "TOTAL REBUILD as a twisted balloon figure (balloon animal style). Remove pencil texture completely.",
+      "Balloon animal / party balloon toy restyle. " +
+      "Preserve the exact original child drawing proportions, pose, silhouette, and simple anatomy. " +
+      "Translate the same character into twisted inflatable balloon segments with visible knots, glossy latex reflections, rounded inflated forms, and playful party colors. " +
+      "Keep the character readable as the original drawing and do not redesign the body into a different balloon sculpture.",
     neg:
-      "NO plush fur. NO fabric seams. NO ice crystal. NO gummy candy. " +
-      "NO hard plastic toy. NO Pixar cinematic render. NO LEGO. NO voxels. " +
-      "NO text, NO letters, NO words, NO typography, NO paragraphs."
+      "NO redesign. NO anatomy changes. NO plush fur. NO fabric seams. NO ice crystal. NO gummy candy. " +
+      "NO hard plastic toy. NO Pixar cinematic render. NO LEGO. NO voxels. NO text. NO letters. NO words. " +
+      "NO typography. NO paragraphs."
   },
 
   // 🎨 (kept) soft children oil painting
   style_watercolor: {
     pos:
-      "Soft children's oil painting on canvas. " +
-      "Thick but gentle impasto brush strokes. " +
-      "Creamy blended oil paint texture. " +
-      "Warm pastel oil palette. " +
-      "Visible canvas fabric texture. " +
-      "Rounded soft edges. " +
-      "Painterly depth with soft light and shadow. " +
-      "Completely repaint from scratch in oil paint. " +
-      "Replace all original lines with expressive brushwork.",
+      "Soft children's oil painting restyle on canvas. " +
+      "Preserve the exact original child drawing proportions, pose, silhouette, and simple anatomy. " +
+      "Use thick but gentle impasto brush strokes, creamy blended oil paint texture, warm pastel palette, visible canvas texture, rounded soft edges, and painterly depth. " +
+      "Keep the drawing simple, childlike, and recognizable as the same original figure while replacing only paint material and surface treatment.",
     neg:
-      "NO watercolor bleeding. NO paper texture. NO pencil lines. " +
-      "NO crisp black outlines. NO vector style. " +
-      "NO LEGO plastic. NO voxel blocks. NO halftone comic dots. NO text."
+      "NO redesign. NO anatomy changes. NO watercolor bleeding. NO paper texture. NO pencil lines. NO crisp black outlines. " +
+      "NO vector style. NO LEGO plastic. NO voxel blocks. NO halftone comic dots. NO text."
   },
 
   style_cardboard: {
     pos:
-      "Handcrafted corrugated cardboard sculpture. Layered cut-out brown paper sheets. Visible fluted inner texture. " +
-      "Rough torn edges, handmade glue seams. Multi-layer 3D diorama look. Realistic tabletop craft photography.",
+      "Handcrafted corrugated cardboard sculpture restyle. " +
+      "Preserve the exact original child drawing proportions, pose, silhouette, and simple anatomy. " +
+      "Use layered cut-out cardboard sheets, visible corrugated inner texture, rough torn edges, handmade glue seams, and a tabletop craft look. " +
+      "Keep the result simple, readable, and clearly based on the original drawing rather than a redesigned paper creature.",
     neg:
-      "NO watercolor paint. NO glossy plastic. NO LEGO studs. NO voxel blocks. NO neon glow outlines. " +
-      "NO halftone comic dots. NO smooth digital 3D render. NO anime cel shading. NO text."
+      "NO redesign. NO anatomy changes. NO watercolor paint. NO glossy plastic. NO LEGO studs. NO voxel blocks. " +
+      "NO neon glow outlines. NO halftone comic dots. NO smooth digital 3D render. NO anime cel shading. NO text."
   },
 
   style_comic: {
     pos:
-      "1960s vintage pop-art comic style. Bold thick black ink outlines. Strong halftone dot shading. " +
-      "Limited CMYK print palette. Retro paper print texture. Slight color misregistration. Graphic high contrast.",
+      "1960s vintage pop-art comic restyle. " +
+      "Preserve the exact original child drawing proportions, pose, silhouette, and simple anatomy. " +
+      "Use bold black ink outlines, strong halftone dot shading, retro print texture, slight color misregistration, and a graphic high-contrast CMYK look. " +
+      "Keep the character clearly the same original drawing, only translated into comic print language.",
     neg:
-      "NO watercolor bleed. NO 3D Pixar look. NO LEGO. NO voxels. NO clay fingerprints. NO cardboard fibers. " +
-      "NO neon sci-fi glow lines. NO text."
+      "NO redesign. NO anatomy changes. NO watercolor bleed. NO 3D Pixar look. NO LEGO. NO voxels. " +
+      "NO clay fingerprints. NO cardboard fibers. NO neon sci-fi glow lines. NO text."
   }
 };
 
 function getStyleExtra(styleId) {
   const k = String(styleId || "").trim();
-  return styleSpecMap[k]?.pos || "Transform into a premium 3D cartoon illustration.";
+  return styleSpecMap[k]?.pos || "Transform into a premium stylized illustration while preserving the exact original child drawing structure.";
 }
 
 function getStyleNegative(styleId) {
@@ -230,8 +235,12 @@ function buildKontextPrompt(styleId) {
   const baseGeneric =
     "Masterpiece art transformation. Convert the child's drawing into a high-end, colorful illustration. " +
     "STRICT: Keep original composition. Do NOT zoom. Do NOT crop. Do NOT rotate. Keep full character in frame. " +
-    "Maintain the original silhouette and pose but TOTALLY replace materials/texture in the target style. " +
-    "Remove all paper artifacts, handwriting, and pencil lines. " +
+    "ULTRA STRICT STRUCTURE LOCK: Preserve EXACT original drawing proportions, pose, silhouette, head size, body shape, limb length, limb angles, and character identity. " +
+    "Do NOT redesign anatomy. Do NOT reinterpret the character. Do NOT improve proportions. Do NOT make the body more realistic. Do NOT add muscles, creature anatomy, armor anatomy, or complex redesign elements. " +
+    "This must still look like the SAME child's drawing, only restyled in material, lighting, and rendering. " +
+    "Only replace MATERIAL, SURFACE, and RENDERING STYLE according to the selected style. " +
+    "Keep the drawing simple, naive, childlike, and recognizable. " +
+    "Remove all paper artifacts, handwriting, notebook traces, camera/photo artifacts, and pencil lines. " +
     "No frames, no borders, no UI, no stickers, no watermark, no text. " +
     "Professional commercial artwork look. Clean output.";
 
@@ -239,28 +248,34 @@ function buildKontextPrompt(styleId) {
   const baseWatercolor =
     "Masterpiece art transformation. Convert the child's drawing into a high-end fine art painting. " +
     "STRICT: Keep original composition. Do NOT zoom. Do NOT crop. Do NOT rotate. Keep full character in frame. " +
-    "Maintain the original silhouette and pose but TOTALLY repaint. " +
+    "ULTRA STRICT STRUCTURE LOCK: Preserve EXACT original drawing proportions, pose, silhouette, head size, body shape, limb length, limb angles, and character identity. " +
+    "Do NOT redesign anatomy. Do NOT reinterpret the character. Do NOT improve proportions. " +
+    "This must still look like the SAME child's drawing, only repainted in the selected fine art surface style. " +
+    "Only replace PAINT MATERIAL, TEXTURE, and RENDERING STYLE. " +
+    "Keep the drawing simple, naive, childlike, and recognizable. " +
     "REMOVE notebook/photo artifacts, remove graphite/pencil and handwriting. " +
     "No frames, no borders, no UI, no stickers, no watermark, no text. " +
     "Fine art painting look. Clean output.";
 
   const globalNegativeGeneric =
-    "STRICT NEGATIVE: no photo of paper, no notebook background, no graphite, no sketch lines, " +
+    "STRICT NEGATIVE: no photo of paper, no notebook background, no graphite, no sketch lines, no handwriting, " +
     "no blur crop, no cut-off body parts, no extra limbs, no duplicated faces, no extra characters, " +
-    "no random objects, no text, no logos, no watermarks.";
+    "no random objects, no anatomy redesign, no proportion changes, no pose changes, no monster reinterpretation, " +
+    "no text, no logos, no watermarks.";
 
   const globalNegativePaint =
     "STRICT NEGATIVE: no notebook lines, no ruled paper, no photo glare, no camera shadows, " +
     "no graphite, no sketch lines, no handwriting, " +
     "no blur crop, no cut-off body parts, no extra limbs, no duplicated faces, no extra characters, " +
-    "no random objects, no text, no logos, no watermarks.";
+    "no random objects, no anatomy redesign, no proportion changes, no pose changes, " +
+    "no text, no logos, no watermarks.";
 
   const stylePos = getStyleExtra(sid);
   const styleNeg = getStyleNegative(sid);
 
   const styleEnforcement =
-    "STYLE ENFORCEMENT: The final result must match ONLY the requested style materials and rendering. " +
-    "If anything conflicts with the style, remove it.";
+    "STYLE ENFORCEMENT: The final result must match ONLY the requested style materials and rendering while preserving the exact original child drawing structure. " +
+    "If anything conflicts with the structure, remove it. If anything conflicts with the selected style, remove it.";
 
   const negBlock = styleNeg ? `STRICT STYLE NEGATIVE: ${styleNeg}` : "";
 
