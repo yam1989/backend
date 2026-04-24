@@ -7,8 +7,86 @@
 import express from "express";
 import multer from "multer";
 import crypto from "crypto";
+import { google } from "googleapis";
+import admin from "firebase-admin";
 
-const VERSION = "DM-2026 FULL v13.2 (SAFE IMAGE PROMPTS + VIDEO ACTION MAP + STRONG VIDEO GUARDRAILS)";
+// ── Firebase Admin (для верификации токенов клиентов) ─────────────────────────
+// На Cloud Run credentials берутся автоматически из сервисного аккаунта (ADC).
+admin.initializeApp();
+
+// ── Middleware: проверка Firebase Auth токена ─────────────────────────────────
+async function requireAuth(req, res, next) {
+  const header = req.headers["authorization"] || "";
+  if (!header.startsWith("Bearer ")) {
+    return res.status(401).json({ ok: false, error: "Unauthorized" });
+  }
+  const token = header.slice(7);
+  try {
+    const decoded = await admin.auth().verifyIdToken(token);
+    req.uid = decoded.uid;
+    next();
+  } catch {
+    return res.status(401).json({ ok: false, error: "Invalid token" });
+  }
+}
+
+// ── Внутренний ключ для вызовов Cloud Functions → Backend ────────────────────
+// Задаётся через env-переменную BACKEND_KEY (и в Cloud Functions, и в Cloud Run).
+const BACKEND_KEY = process.env.BACKEND_KEY || "";
+
+const VERSION = "DM-2026 FULL v13.3 (SAFE IMAGE PROMPTS + VIDEO ACTION MAP + STRONG VIDEO GUARDRAILS + IAP VERIFY)";
+
+// ── Google Play verification ──────────────────────────────────────────────────
+// Set env var GOOGLE_SERVICE_ACCOUNT_JSON with the JSON of your service account
+// (Google Play Console → Setup → API access → Service account → JSON key)
+// Set env var GOOGLE_PACKAGE_NAME (e.g. "com.wonderdoodle.app")
+const GOOGLE_PACKAGE_NAME = (process.env.GOOGLE_PACKAGE_NAME || "").trim();
+let _googleServiceAccount = null;
+try {
+  if (process.env.GOOGLE_SERVICE_ACCOUNT_JSON) {
+    _googleServiceAccount = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON);
+  }
+} catch (e) {
+  console.warn("[IAP] Failed to parse GOOGLE_SERVICE_ACCOUNT_JSON:", e.message);
+}
+
+async function verifyGooglePlayPurchase({ productId, purchaseToken, isSubscription }) {
+  if (!_googleServiceAccount || !GOOGLE_PACKAGE_NAME) {
+    // Not configured — fail closed (reject unverified purchases)
+    console.warn("[IAP] verifyGooglePlayPurchase: service account not configured");
+    return { valid: false, error: "Server not configured" };
+  }
+
+  try {
+    const auth = new google.auth.GoogleAuth({
+      credentials: _googleServiceAccount,
+      scopes: ["https://www.googleapis.com/auth/androidpublisher"],
+    });
+    const pub = google.androidpublisher({ version: "v3", auth });
+
+    if (isSubscription) {
+      const r = await pub.purchases.subscriptions.get({
+        packageName: GOOGLE_PACKAGE_NAME,
+        subscriptionId: productId,
+        token: purchaseToken,
+      });
+      // paymentState: 1 = payment received, 2 = free trial
+      const ps = r.data.paymentState;
+      return { valid: ps === 1 || ps === 2 };
+    } else {
+      const r = await pub.purchases.products.get({
+        packageName: GOOGLE_PACKAGE_NAME,
+        productId,
+        token: purchaseToken,
+      });
+      // purchaseState: 0 = purchased
+      return { valid: r.data.purchaseState === 0 };
+    }
+  } catch (e) {
+    console.error("[IAP] verifyGooglePlayPurchase error:", e.message);
+    return { valid: false, error: String(e.message) };
+  }
+}
 
 const app = express();
 app.disable("x-powered-by");
@@ -216,6 +294,19 @@ const styleSpecMap = {
     neg:
       "NO redesign. NO anatomy changes. NO watercolor bleed. NO 3D Pixar look. NO LEGO. NO voxels. " +
       "NO clay fingerprints. NO cardboard fibers. NO neon sci-fi glow lines. NO text."
+  },
+
+  style_space: {
+    pos:
+      "Deep space sci-fi restyle. " +
+      "Preserve the exact original child drawing proportions, pose, silhouette, and simple anatomy. " +
+      "Place the character in an epic cosmic environment with a glowing star nebula background, soft bioluminescent rim light, glowing energy body or simple space suit, floating asteroid dust particles, and dramatic deep space lighting. " +
+      "Keep the character clearly the same original drawing — simple, childlike, recognizable — only restyled into a cosmic space mood. " +
+      "Remove paper and pencil artifacts without changing structure.",
+    neg:
+      "NO redesign. NO anatomy changes. NO realistic astronaut body. NO new body structure. NO plush fur. NO gummy candy. " +
+      "NO LEGO. NO voxel blocks. NO cardboard. NO comic halftone. NO watercolor. NO flat boring background. " +
+      "NO text. NO letters. NO words. NO typography."
   }
 };
 
@@ -338,7 +429,7 @@ function bufferToDataUri(buf, mime) {
   return `data:${mime || "image/png"};base64,${buf.toString("base64")}`;
 }
 
-app.post("/magic", upload.single("image"), async (req, res) => {
+app.post("/magic", requireAuth, upload.single("image"), async (req, res) => {
   try {
     const file = req.file;
     const styleId = (req.body?.styleId || "").toString().trim();
@@ -418,7 +509,7 @@ app.get("/magic/result", async (req, res) => {
   return res.status(200).send(Buffer.from(await r.arrayBuffer()));
 });
 
-app.post("/video/start", upload.single("image"), async (req, res) => {
+app.post("/video/start", requireAuth, upload.single("image"), async (req, res) => {
   try {
     const file = req.file;
     if (!file?.buffer) return res.status(400).json({ ok: false, error: "Missing image" });
@@ -463,6 +554,29 @@ app.get("/video/status", async (req, res) => {
   });
   const p = await r.json();
   return res.json({ ok: true, status: p.status, outputUrl: p.output });
+});
+
+// ── IAP VERIFY ───────────────────────────────────────────────────────────────
+app.post("/verify-purchase", express.json(), async (req, res) => {
+  // Только внутренние вызовы с BACKEND_KEY (от Cloud Functions)
+  const key = req.headers["x-backend-key"] || "";
+  if (!BACKEND_KEY || key !== BACKEND_KEY) {
+    return res.status(401).json({ ok: false, valid: false, error: "Unauthorized" });
+  }
+
+  const { productId, purchaseToken, isSubscription } = req.body || {};
+
+  if (!productId || !purchaseToken) {
+    return res.status(400).json({ ok: false, valid: false, error: "Missing productId or purchaseToken" });
+  }
+
+  const result = await verifyGooglePlayPurchase({
+    productId,
+    purchaseToken: String(purchaseToken),
+    isSubscription: !!isSubscription,
+  });
+
+  return res.json({ ok: true, ...result });
 });
 
 app.get("/", (req, res) => res.send(`DM-2026 Backend OK (${VERSION})`));
