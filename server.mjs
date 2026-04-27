@@ -12,7 +12,9 @@ import admin from "firebase-admin";
 
 // ── Firebase Admin (для верификации токенов клиентов) ─────────────────────────
 // На Cloud Run credentials берутся автоматически из сервисного аккаунта (ADC).
-admin.initializeApp();
+// Явно указываем projectId чтобы Firebase Admin знал в каком проекте верифицировать токены
+// (Cloud Run работает в doodle-magic-backend, Firebase проект — doodle-magic-12f2e)
+admin.initializeApp({ projectId: 'doodle-magic-12f2e' });
 
 // ── Middleware: проверка Firebase Auth токена ─────────────────────────────────
 async function requireAuth(req, res, next) {
